@@ -1,7 +1,9 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 import ReactMarkdown from "react-markdown";
+import CodeMirror from "@uiw/react-codemirror";
+import { python } from "@codemirror/lang-python";
 import { matchPath, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { createAgent, getAgents, getAnalytics, getConversation, getConversations, streamChat, updateAgent } from "./api";
 import type { Agent, AgentCreate, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, UserProfile } from "./types";
@@ -51,6 +53,15 @@ function MessageActions({ message }: { message: ChatMessage }) {
   </div>;
 }
 
+function MarkdownPromptEditor({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder: string }) {
+  const [preview, setPreview] = useState(false);
+  return <section className="markdown-editor"><div className="editor-heading"><strong>{label}</strong><div role="group" aria-label={`${label} mode`}><button type="button" className={!preview ? "active" : ""} onClick={() => setPreview(false)}>Edit</button><button type="button" className={preview ? "active" : ""} onClick={() => setPreview(true)}>Preview</button></div></div>{preview ? <div className="markdown-preview">{value.trim() ? <ReactMarkdown>{value}</ReactMarkdown> : <p>Nothing to preview.</p>}</div> : <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={7} placeholder={placeholder} />}</section>;
+}
+
+function PythonEditor({ value, onChange, label = "Python source" }: { value: string; onChange: (value: string) => void; label?: string }) {
+  return <label className="python-editor"><span>{label}</span><CodeMirror value={value} height="190px" extensions={[python()]} onChange={onChange} basicSetup={{ lineNumbers: true, foldGutter: true, highlightActiveLine: true, autocompletion: true }} /></label>;
+}
+
 function createConversation(agentId: string): Conversation {
   return { id: crypto.randomUUID(), agentId, historyLoaded: true, title: "New conversation", messages: [] };
 }
@@ -89,9 +100,14 @@ function taskLabel(event: ChatEvent) {
   return null;
 }
 
-const MODEL_OPTIONS = [
-  { id: "gpt-5.4-mini", type: "openai" as const, label: "GPT-5.4 mini (OpenAI)" },
-  { id: "llama3.2:3b", type: "ollama" as const, label: "Llama 3.2 3B (Ollama)" },
+type ModelOption = { id: string; type: Agent["model_type"]; label: string; available: boolean };
+const MODEL_OPTIONS: ModelOption[] = [
+  { id: "gpt-5.4-mini", type: "openai", label: "GPT-5.4 mini (OpenAI)", available: true },
+  { id: "llama3.2:3b", type: "ollama", label: "Llama 3.2 3B (Ollama)", available: true },
+  { id: "gpt-5.4", type: "openai", label: "GPT-5.4 (OpenAI)", available: false },
+  { id: "claude-sonnet-4.5", type: "openai", label: "Claude Sonnet 4.5 (Anthropic)", available: false },
+  { id: "gemini-2.5-pro", type: "openai", label: "Gemini 2.5 Pro (Google)", available: false },
+  { id: "mistral-large", type: "openai", label: "Mistral Large (Mistral)", available: false },
 ];
 
 const MARKETPLACE_APPS = [
@@ -161,7 +177,7 @@ function Marketplace() {
     </div>
     {dialog && <div className="marketplace-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}><section className="marketplace-dialog" role="dialog" aria-modal="true" aria-labelledby="marketplace-dialog-title"><div className="agent-modal-header"><div><p className="eyebrow">MARKETPLACE</p><h1 id="marketplace-dialog-title">{dialog === "mcp" ? "Register MCP Server" : "Create a Tool"}</h1></div><button className="modal-close" type="button" onClick={closeDialog} aria-label="Close dialog">×</button></div>
       {dialog === "mcp" ? <form className="marketplace-form" onSubmit={registerMcp}><label>Name<input value={mcpForm.name} onChange={(event) => setMcpForm({ ...mcpForm, name: event.target.value })} /></label><label>Description<textarea rows={3} value={mcpForm.description} onChange={(event) => setMcpForm({ ...mcpForm, description: event.target.value })} /></label><label>Endpoint URL<input type="url" placeholder="https://mcp.example.com/server" value={mcpForm.endpoint} onChange={(event) => setMcpForm({ ...mcpForm, endpoint: event.target.value })} /></label><label>Transport<select value={mcpForm.transport} onChange={(event) => setMcpForm({ ...mcpForm, transport: event.target.value })}><option>Streamable HTTP</option><option>SSE</option></select></label>{formError && <div className="error-banner">{formError}</div>}<div className="marketplace-form-actions"><button type="button" className="secondary-button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit">Register</button></div></form>
-      : <form className="marketplace-form" onSubmit={createTool}><label>Name<input placeholder="get_stock_price" value={toolForm.name} onChange={(event) => setToolForm({ ...toolForm, name: event.target.value })} /></label><label>Description<textarea rows={3} value={toolForm.description} onChange={(event) => setToolForm({ ...toolForm, description: event.target.value })} /></label><label>Python source<textarea rows={7} value={toolForm.source_code} onChange={(event) => setToolForm({ ...toolForm, source_code: event.target.value })} /></label><label className="checkbox-label"><input type="checkbox" checked={toolForm.enabled} onChange={(event) => setToolForm({ ...toolForm, enabled: event.target.checked })} /> Enabled</label>{formError && <div className="error-banner">{formError}</div>}<div className="marketplace-form-actions"><button type="button" className="secondary-button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit">Create Tool</button></div></form>}
+      : <form className="marketplace-form" onSubmit={createTool}><label>Name<input placeholder="get_stock_price" value={toolForm.name} onChange={(event) => setToolForm({ ...toolForm, name: event.target.value })} /></label><label>Description<textarea rows={3} value={toolForm.description} onChange={(event) => setToolForm({ ...toolForm, description: event.target.value })} /></label><PythonEditor value={toolForm.source_code} onChange={(value) => setToolForm({ ...toolForm, source_code: value })} /><label className="checkbox-label"><input type="checkbox" checked={toolForm.enabled} onChange={(event) => setToolForm({ ...toolForm, enabled: event.target.checked })} /> Enabled</label>{formError && <div className="error-banner">{formError}</div>}<div className="marketplace-form-actions"><button type="button" className="secondary-button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit">Create Tool</button></div></form>}
     </section></div>}
   </section>;
 }
@@ -217,20 +233,24 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
   const [description, setDescription] = useState("");
   const [modelId, setModelId] = useState(MODEL_OPTIONS[0].id);
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [userPrompt, setUserPrompt] = useState("");
   const [workflow, setWorkflow] = useState("");
   const [tools, setTools] = useState<AgentTool[]>([]);
   const [topics, setTopics] = useState("");
   const [fallback, setFallback] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const modelPickerRef = useRef<HTMLDivElement>(null);
+  const modelTriggerRef = useRef<HTMLButtonElement>(null);
   const availableModels = editingAgent && !MODEL_OPTIONS.some((model) => model.id === editingAgent.model_id)
-    ? [...MODEL_OPTIONS, { id: editingAgent.model_id, type: editingAgent.model_type, label: `${editingAgent.model_id} (${editingAgent.model_type})` }]
+    ? [...MODEL_OPTIONS, { id: editingAgent.model_id, type: editingAgent.model_type, label: `${editingAgent.model_id} (${editingAgent.model_type})`, available: true }]
     : MODEL_OPTIONS;
-  const selectedModel = availableModels.find((model) => model.id === modelId) ?? availableModels[0];
+  const selectedModel = availableModels.find((model) => model.id === modelId && model.available) ?? availableModels.find((model) => model.available) ?? availableModels[0];
 
   function resetForm() {
-    setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setWorkflow("");
-    setTools([]); setTopics(""); setFallback(""); setStep(1); setError(""); setEditingAgent(null);
+    setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setUserPrompt(""); setWorkflow("");
+    setTools([]); setTopics(""); setFallback(""); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
   }
 
   function openCreate() { resetForm(); setCreating(true); }
@@ -238,7 +258,7 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
     const guardrails = agent.guardrails ?? {};
     const allowedTopics = Array.isArray(guardrails.allowed_topics) ? guardrails.allowed_topics.filter((topic): topic is string => typeof topic === "string") : [];
     setEditingAgent(agent); setName(agent.agent_name); setDescription(agent.description); setModelId(agent.model_id);
-    setSystemPrompt(agent.system_prompts[0] ?? ""); setWorkflow(agent.workflow); setTools(agent.tooling.map((tool) => ({ ...tool })));
+    setSystemPrompt(agent.system_prompts[0] ?? ""); setUserPrompt(agent.user_prompts?.[0] ?? ""); setWorkflow(agent.workflow); setTools(agent.tooling.map((tool) => ({ ...tool })));
     setTopics(allowedTopics.join(", ")); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
     setStep(1); setError(""); setCreating(true);
   }
@@ -258,10 +278,29 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
     return () => window.removeEventListener("keydown", dismissOnEscape);
   }, [creating, saving]);
 
+  useEffect(() => {
+    if (!modelMenuOpen) return undefined;
+    const dismiss = (event: PointerEvent) => {
+      if (!modelPickerRef.current?.contains(event.target as Node)) setModelMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", dismiss);
+    return () => window.removeEventListener("pointerdown", dismiss);
+  }, [modelMenuOpen]);
+
+  function handleModelListKey(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") { event.preventDefault(); setModelMenuOpen(false); modelTriggerRef.current?.focus(); return; }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="option"]:not(:disabled)'));
+    const current = options.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "ArrowDown" ? (current + 1) % options.length : (current <= 0 ? options.length - 1 : current - 1);
+    options[next]?.focus();
+  }
+
   function next() {
     if (step === 1 && (!name.trim() || !description.trim())) { setError("Name and description are required."); return; }
-    if (step === 2 && tools.some((tool) => !tool.name.trim() || !tool.description.trim() || !tool.source_code.trim())) { setError("Complete or remove each tool before continuing."); return; }
-    setError(""); setStep((value) => Math.min(3, value + 1));
+    if (step === 3 && tools.some((tool) => !tool.name.trim() || !tool.description.trim() || !tool.source_code.trim())) { setError("Complete or remove each tool before continuing."); return; }
+    setError(""); setStep((value) => Math.min(5, value + 1));
   }
   function updateTool(index: number, field: keyof AgentTool, value: string | boolean) {
     setTools((items) => items.map((tool, itemIndex) => itemIndex === index ? { ...tool, [field]: value } : tool));
@@ -274,14 +313,14 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
     if (fallback.trim()) guardrails.out_of_scope_response = fallback.trim(); else delete guardrails.out_of_scope_response;
     const updatePayload: AgentUpdate = {
       agent_name: name.trim(), description: description.trim(), workflow: workflow.trim(), model_id: selectedModel.id,
-      model_type: selectedModel.type, system_prompts: systemPrompt.trim() ? [systemPrompt.trim()] : [], tooling: tools, guardrails,
+      model_type: selectedModel.type, system_prompts: systemPrompt.trim() ? [systemPrompt.trim()] : [], user_prompts: userPrompt.trim() ? [userPrompt.trim()] : [], tooling: tools, guardrails,
     };
     try {
       if (editingAgent) {
         onUpdated(await updateAgent(editingAgent.agent_id, updatePayload));
         setCreating(false); resetForm();
       } else {
-        const createPayload: AgentCreate = { ...updatePayload as Omit<Agent, "agent_id">, user_prompts: [], owner_email: USER_PROFILE.emailId, created_by: USER_PROFILE.emailId, shared_with: [] };
+        const createPayload: AgentCreate = { ...updatePayload as Omit<Agent, "agent_id">, owner_email: USER_PROFILE.emailId, created_by: USER_PROFILE.emailId, shared_with: [] };
         onCreated(await createAgent(createPayload));
       }
     }
@@ -293,11 +332,13 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
   const visibleAgents = agents.filter((agent) => !agentQuery || [agent.agent_name, agent.description, agent.model_id].some((value) => value.toLocaleLowerCase().includes(agentQuery)))
     .sort((left, right) => left.agent_name.localeCompare(right.agent_name, undefined, { sensitivity: "base" }));
 
-  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><button type="button" className="text-button" onClick={() => openEdit(agent)}>Edit</button></div><p>{agent.description || "No description provided."}</p><small>{agent.model_id}</small></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>{["Details", "Tools & guardrails", "Review"].map((label, index) => <span className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} key={label}>{index + 1}. {label}</span>)}</div><div className="agent-wizard">
-    {step === 1 && <div className="wizard-fields"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><label>Model<select value={modelId} onChange={(event) => setModelId(event.target.value)}>{availableModels.map((model) => <option value={model.id} key={model.id}>{model.label}</option>)}</select></label><label>System prompt<textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={5} placeholder="Instructions for the agent" /></label><label>Workflow<textarea value={workflow} onChange={(event) => setWorkflow(event.target.value)} rows={4} placeholder="Describe the process this agent should follow" /></label></div>}
-    {step === 2 && <div className="wizard-fields"><div className="field-heading"><div><h2>Tools</h2><p>Add trusted Python tools this agent can call.</p></div><button className="secondary-button" onClick={() => setTools((items) => [...items, { name: "", description: "", source_code: "", enabled: true }])}>Add tool</button></div>{tools.map((tool, index) => <div className="tool-editor" key={index}><button className="remove-button" onClick={() => setTools((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button><label>Name<input value={tool.name} onChange={(event) => updateTool(index, "name", event.target.value)} /></label><label>Description<input value={tool.description} onChange={(event) => updateTool(index, "description", event.target.value)} /></label><label>Python source<textarea value={tool.source_code} onChange={(event) => updateTool(index, "source_code", event.target.value)} rows={6} /></label><label className="checkbox-label"><input type="checkbox" checked={tool.enabled} onChange={(event) => updateTool(index, "enabled", event.target.checked)} /> Enabled</label></div>)}<div className="guardrails"><h2>Guardrails</h2><label>Allowed topics<input value={topics} onChange={(event) => setTopics(event.target.value)} placeholder="finance, portfolio analysis" /></label><label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={3} /></label></div></div>}
-    {step === 3 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd>{systemPrompt || "None"}</dd><dt>Workflow</dt><dd>{workflow || "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Allowed topics</dt><dd>{topics || "None"}</dd></dl></div>}
-    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 3 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</button>}</div>
+  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><button type="button" className="text-button" onClick={() => openEdit(agent)}>Edit</button></div><p>{agent.description || "No description provided."}</p><small>{agent.model_id}</small></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>{["Details", "Prompts", "Tools", "Guardrails", "Review"].map((label, index) => <span className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} key={label}>{index + 1}. {label}</span>)}</div><div className="agent-wizard">
+    {step === 1 && <div className="wizard-fields"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><div className="model-picker" ref={modelPickerRef}><span className="model-picker-label">Model</span><button ref={modelTriggerRef} type="button" className="model-picker-trigger" aria-haspopup="listbox" aria-expanded={modelMenuOpen} onClick={() => { const opening = !modelMenuOpen; setModelMenuOpen(opening); if (opening) requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); }} onKeyDown={(event) => { if (event.key === "Escape") { setModelMenuOpen(false); return; } if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setModelMenuOpen(true); requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); } }}>{selectedModel.label}<span aria-hidden="true">⌄</span></button>{modelMenuOpen && <div className="model-picker-list" role="listbox" aria-label="Model" onKeyDown={handleModelListKey}>{availableModels.map((model) => <button type="button" role="option" aria-selected={model.available && modelId === model.id} key={model.id} disabled={!model.available} className={model.available ? "" : "unavailable"} onClick={() => { setModelId(model.id); setModelMenuOpen(false); modelTriggerRef.current?.focus(); }}><span>{model.label}</span>{!model.available && <small>Coming soon</small>}</button>)}</div>}</div><label>Workflow<textarea value={workflow} onChange={(event) => setWorkflow(event.target.value)} rows={4} placeholder="Describe the process this agent should follow" /></label></div>}
+    {step === 2 && <div className="wizard-fields"><MarkdownPromptEditor label="System prompt" value={systemPrompt} onChange={setSystemPrompt} placeholder="Write system instructions using Markdown" /><MarkdownPromptEditor label="User prompt" value={userPrompt} onChange={setUserPrompt} placeholder="Write a reusable user prompt using Markdown" /></div>}
+    {step === 3 && <div className="wizard-fields"><div className="field-heading"><div><h2>Tools</h2><p>Add trusted Python tools this agent can call.</p></div><button type="button" className="secondary-button" onClick={() => setTools((items) => [...items, { name: "", description: "", source_code: "", enabled: true }])}>Add tool</button></div>{tools.map((tool, index) => <div className="tool-editor" key={index}><button type="button" className="remove-button" onClick={() => setTools((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button><label>Name<input value={tool.name} onChange={(event) => updateTool(index, "name", event.target.value)} /></label><label>Description<input value={tool.description} onChange={(event) => updateTool(index, "description", event.target.value)} /></label><PythonEditor value={tool.source_code} onChange={(value) => updateTool(index, "source_code", value)} /><label className="checkbox-label"><input type="checkbox" checked={tool.enabled} onChange={(event) => updateTool(index, "enabled", event.target.checked)} /> Enabled</label></div>)}</div>}
+    {step === 4 && <div className="wizard-fields guardrails-step"><div><h2>Guardrails</h2><p>Define which requests this agent should accept and how it handles out-of-scope questions.</p></div><label>Allowed topics<input value={topics} onChange={(event) => setTopics(event.target.value)} placeholder="finance, portfolio analysis" /></label><label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={4} /></label></div>}
+    {step === 5 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Workflow</dt><dd>{workflow || "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Allowed topics</dt><dd>{topics || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd></dl></div>}
+    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 5 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</button>}</div>
   </div></section></div>}</div>;
 }
 
@@ -564,6 +605,8 @@ export default function App() {
   const conversationAgentName = agents.find((agent) => agent.agent_id === active?.agentId)?.agent_name ?? selectedAgentName;
   const activeConversationLoading = conversationLoadingId === active?.id;
   const activeHistoryPending = Boolean(active?.sessionId && !active.historyLoaded);
+  const headerAgent = agents.find((agent) => agent.agent_id === active?.agentId) ?? (!active?.sessionId ? agents.find((agent) => agent.agent_id === selectedAgent) : undefined);
+  const conversationModelId = headerAgent?.model_id ?? (activeHistoryPending || activeConversationLoading ? "Loading model…" : "No model selected");
 
   return <main className="app-shell">
     <aside className={sidebarExpanded ? "sidebar expanded" : "sidebar"} onPointerEnter={() => setSidebarExpanded(true)} onPointerLeave={() => setSidebarExpanded(false)} onPointerUp={(event) => { if ((event.target as Element).closest("button,a")) setSidebarExpanded(false); }} onFocusCapture={() => setSidebarExpanded(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSidebarExpanded(false); }}>
@@ -579,7 +622,7 @@ export default function App() {
     <section className={view === "chat" ? "workspace" : "workspace content-workspace"}>
       <Routes><Route path="/" element={<Navigate to="/chat" replace />} /><Route path="/chat" element={null} /><Route path="/conversations/:sessionId" element={null} /><Route path="/agents" element={null} /><Route path="/marketplace" element={null} /><Route path="/analytics" element={null} /><Route path="*" element={<Navigate to="/chat" replace />} /></Routes>
       {view === "agents" ? <AgentManager agents={agents} onCreated={agentCreated} onUpdated={agentUpdated} /> : view === "marketplace" ? <Marketplace /> : view === "analytics" ? <AnalyticsDashboard /> : <>
-      <header className="topbar"><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
+      <header className="topbar"><span className="conversation-model" title={conversationModelId}>{conversationModelId}</span><span className="topbar-divider" aria-hidden="true" /><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
       <div ref={chatBodyRef} className={active?.messages.length || activeConversationLoading ? "chat-body transcript" : "chat-body welcome"}>
         {activeConversationLoading && <div className="transcript-loading" role="status" aria-label="Loading conversation"><span /><span /><span /><p>Loading conversation</p></div>}
         {!activeConversationLoading && !active?.messages.length && <div className="welcome-content"><p className="eyebrow">AI HARNESS</p><h1>Where should we start?</h1><p>Ask your configured AI agent anything.</p><div className="suggestions"><button onClick={() => setPrompt("Analyse my portfolio allocation")}>Analyse my portfolio allocation</button><button onClick={() => setPrompt("Get the latest price for AAPL")}>Get a current stock price</button><button onClick={() => setPrompt("Calculate my net worth with stock holdings")}>Calculate my net worth with stock holdings</button></div></div>}

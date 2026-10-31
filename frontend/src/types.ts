@@ -9,10 +9,11 @@ export type Agent = {
   model_type: "openai" | "ollama";
   tooling: AgentTool[];
   system_prompts: string[];
+  user_prompts: string[];
   guardrails: Record<string, unknown>;
 };
 
-export type AgentCreate = Omit<Agent, "agent_id"> & { owner_email: string; created_by: string; shared_with: string[]; user_prompts: string[] };
+export type AgentCreate = Omit<Agent, "agent_id"> & { owner_email: string; created_by: string; shared_with: string[] };
 export type AgentUpdate = Partial<Omit<Agent, "agent_id">>;
 
 export type ChartContent = {
