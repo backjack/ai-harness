@@ -3,8 +3,8 @@ import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 import ReactMarkdown from "react-markdown";
 import { matchPath, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { createAgent, getAgents, getAnalytics, getConversation, getConversations, streamChat } from "./api";
-import type { Agent, AgentCreate, AgentTool, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, UserProfile } from "./types";
+import { createAgent, getAgents, getAnalytics, getConversation, getConversations, streamChat, updateAgent } from "./api";
+import type { Agent, AgentCreate, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, UserProfile } from "./types";
 
 const USER_PROFILE: UserProfile = { name: "Neeraj Sharma", emailId: "neerajs28288@gmail.com" };
 
@@ -120,6 +120,7 @@ const MARKETPLACE_TOOLS: MarketplaceTool[] = [
 
 function Marketplace() {
   const [tab, setTab] = useState<"apps" | "mcp" | "tools">("apps");
+  const [search, setSearch] = useState("");
   const [mcpServers, setMcpServers] = useState(MARKETPLACE_MCP_SERVERS);
   const [tools, setTools] = useState(MARKETPLACE_TOOLS);
   const [dialog, setDialog] = useState<"mcp" | "tool" | null>(null);
@@ -143,12 +144,20 @@ function Marketplace() {
     setToolForm({ name: "", description: "", source_code: "", enabled: true }); closeDialog();
   }
 
+  const query = search.trim().toLocaleLowerCase();
+  const byName = <T extends { name: string }>(left: T, right: T) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+  const apps = MARKETPLACE_APPS.filter((app) => !query || [app.name, app.description, app.category].some((value) => value.toLocaleLowerCase().includes(query))).sort(byName);
+  const visibleMcpServers = mcpServers.filter((server) => !query || [server.name, server.description, server.endpoint, server.transport].some((value) => value.toLocaleLowerCase().includes(query))).sort(byName);
+  const visibleTools = tools.filter((tool) => !query || [tool.name, tool.description, tool.source_code, tool.enabled ? "enabled" : "disabled"].some((value) => value.toLocaleLowerCase().includes(query))).sort(byName);
+  const resultCount = tab === "apps" ? apps.length : tab === "mcp" ? visibleMcpServers.length : visibleTools.length;
+
   return <section className="content-page marketplace-page"><header className="content-page-header"><div><p className="eyebrow">DISCOVER</p><h1>Marketplace</h1><p>Explore apps, integrations, and reusable tools for AI Harness agents.</p></div>{tab === "mcp" ? <button className="primary-button" onClick={() => setDialog("mcp")}>Register MCP Server</button> : tab === "tools" ? <button className="primary-button" onClick={() => setDialog("tool")}>Create a Tool</button> : null}</header>
-    <div className="marketplace-tabs" role="tablist" aria-label="Marketplace categories" onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const tabs = ["apps", "mcp", "tools"] as const; const next = (tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length; setTab(tabs[next]); requestAnimationFrame(() => document.getElementById(`marketplace-tab-${tabs[next]}`)?.focus()); }}>{([ ["apps", "Apps"], ["mcp", "MCP Servers"], ["tools", "Agent Tools"] ] as const).map(([id, label]) => <button id={`marketplace-tab-${id}`} type="button" role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} aria-controls={`marketplace-${id}`} className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}</div>
+    <div className="marketplace-toolbar"><div className="marketplace-tabs" role="tablist" aria-label="Marketplace categories" onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const tabs = ["apps", "mcp", "tools"] as const; const next = (tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length; setTab(tabs[next]); requestAnimationFrame(() => document.getElementById(`marketplace-tab-${tabs[next]}`)?.focus()); }}>{([ ["apps", "Apps"], ["mcp", "MCP Servers"], ["tools", "Agent Tools"] ] as const).map(([id, label]) => <button id={`marketplace-tab-${id}`} type="button" role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} aria-controls={`marketplace-${id}`} className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}</div><label className="catalog-search marketplace-search"><span className="sr-only">Search marketplace</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search marketplace" /></label></div>
     <div id={`marketplace-${tab}`} role="tabpanel" aria-labelledby={`marketplace-tab-${tab}`} className="marketplace-grid">
-      {tab === "apps" && MARKETPLACE_APPS.map((app) => <article className="marketplace-card" key={app.name}><div className="marketplace-icon" aria-hidden="true">{app.icon}</div><div><span className="marketplace-category">{app.category}</span><h2>{app.name}</h2><p>{app.description}</p></div><span className="sample-badge">Sample app</span></article>)}
-      {tab === "mcp" && mcpServers.map((server) => <article className="marketplace-card catalog-card" key={`${server.name}-${server.endpoint}`}><div className="marketplace-icon" aria-hidden="true">MCP</div><div><span className="marketplace-category">{server.transport}</span><h2>{server.name}</h2><p>{server.description}</p><code>{server.endpoint}</code></div></article>)}
-      {tab === "tools" && tools.map((tool) => <article className="marketplace-card catalog-card" key={tool.name}><div className="marketplace-icon" aria-hidden="true">AT</div><div><span className="marketplace-category">{tool.enabled ? "Enabled" : "Disabled"}</span><h2>{tool.name}</h2><p>{tool.description}</p><code>{tool.source_code}</code></div></article>)}
+      {tab === "apps" && apps.map((app) => <article className="marketplace-card" key={app.name}><div className="marketplace-icon" aria-hidden="true">{app.icon}</div><div><span className="marketplace-category">{app.category}</span><h2>{app.name}</h2><p>{app.description}</p></div><span className="sample-badge">Sample app</span></article>)}
+      {tab === "mcp" && visibleMcpServers.map((server) => <article className="marketplace-card catalog-card" key={`${server.name}-${server.endpoint}`}><div className="marketplace-icon" aria-hidden="true">MCP</div><div><span className="marketplace-category">{server.transport}</span><h2>{server.name}</h2><p>{server.description}</p><code>{server.endpoint}</code></div></article>)}
+      {tab === "tools" && visibleTools.map((tool) => <article className="marketplace-card catalog-card" key={tool.name}><div className="marketplace-icon" aria-hidden="true">AT</div><div><span className="marketplace-category">{tool.enabled ? "Enabled" : "Disabled"}</span><h2>{tool.name}</h2><p>{tool.description}</p><code>{tool.source_code}</code></div></article>)}
+      {resultCount === 0 && <p className="catalog-empty">No marketplace items match “{search.trim()}”.</p>}
     </div>
     {dialog && <div className="marketplace-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}><section className="marketplace-dialog" role="dialog" aria-modal="true" aria-labelledby="marketplace-dialog-title"><div className="agent-modal-header"><div><p className="eyebrow">MARKETPLACE</p><h1 id="marketplace-dialog-title">{dialog === "mcp" ? "Register MCP Server" : "Create a Tool"}</h1></div><button className="modal-close" type="button" onClick={closeDialog} aria-label="Close dialog">×</button></div>
       {dialog === "mcp" ? <form className="marketplace-form" onSubmit={registerMcp}><label>Name<input value={mcpForm.name} onChange={(event) => setMcpForm({ ...mcpForm, name: event.target.value })} /></label><label>Description<textarea rows={3} value={mcpForm.description} onChange={(event) => setMcpForm({ ...mcpForm, description: event.target.value })} /></label><label>Endpoint URL<input type="url" placeholder="https://mcp.example.com/server" value={mcpForm.endpoint} onChange={(event) => setMcpForm({ ...mcpForm, endpoint: event.target.value })} /></label><label>Transport<select value={mcpForm.transport} onChange={(event) => setMcpForm({ ...mcpForm, transport: event.target.value })}><option>Streamable HTTP</option><option>SSE</option></select></label>{formError && <div className="error-banner">{formError}</div>}<div className="marketplace-form-actions"><button type="button" className="secondary-button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit">Register</button></div></form>
@@ -199,8 +208,10 @@ function AnalyticsDashboard() {
   return <section className="content-page"><header className="content-page-header"><div><p className="eyebrow">LAST {report.lookback_days} DAYS</p><h1>Analytics</h1><p>Model usage, agent activity, token consumption, and estimated OpenAI cost.</p></div><button className="secondary-button" onClick={load}>Refresh</button></header><div className="analytics-summary"><article><span>Interactions</span><strong>{formatNumber(report.summary.interaction_count)}</strong></article><article><span>Input tokens</span><strong>{formatNumber(report.summary.input_tokens)}</strong></article><article><span>Output tokens</span><strong>{formatNumber(report.summary.output_tokens)}</strong></article><article><span>Estimated cost</span><strong className={report.summary.cost_usd === null ? "cost-unavailable" : ""}>{costLabel}</strong></article></div>{report.by_model.some((row) => row.cost_usd === null) && <p className="analytics-note">Cost charts omit models without configured pricing; unavailable cost is not treated as zero.</p>}<div className="analytics-grid"><AnalyticsChart title="Cost by model" categories={pricedModels.map((row) => row.model_id)} series={[{ name: "Cost", data: pricedModels.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Cost by agent" categories={pricedAgents.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Cost", data: pricedAgents.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Token usage by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Input tokens", data: report.by_model.map((row) => row.input_tokens) }, { name: "Output tokens", data: report.by_model.map((row) => row.output_tokens) }]} /><AnalyticsChart title="Interactions by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Interactions", data: report.by_model.map((row) => row.interaction_count) }]} /><AnalyticsChart title="Interactions by agent" categories={report.by_agent.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Interactions", data: report.by_agent.map((row) => row.interaction_count) }]} /></div></section>;
 }
 
-function AgentManager({ agents, onCreated, onBack }: { agents: Agent[]; onCreated: (agent: Agent) => void; onBack: () => void }) {
+function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCreated: (agent: Agent) => void; onUpdated: (agent: Agent) => void }) {
   const [creating, setCreating] = useState(false);
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [search, setSearch] = useState("");
   const [step, setStep] = useState(1);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -212,13 +223,30 @@ function AgentManager({ agents, onCreated, onBack }: { agents: Agent[]; onCreate
   const [fallback, setFallback] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const selectedModel = MODEL_OPTIONS.find((model) => model.id === modelId) ?? MODEL_OPTIONS[0];
+  const availableModels = editingAgent && !MODEL_OPTIONS.some((model) => model.id === editingAgent.model_id)
+    ? [...MODEL_OPTIONS, { id: editingAgent.model_id, type: editingAgent.model_type, label: `${editingAgent.model_id} (${editingAgent.model_type})` }]
+    : MODEL_OPTIONS;
+  const selectedModel = availableModels.find((model) => model.id === modelId) ?? availableModels[0];
+
+  function resetForm() {
+    setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setWorkflow("");
+    setTools([]); setTopics(""); setFallback(""); setStep(1); setError(""); setEditingAgent(null);
+  }
+
+  function openCreate() { resetForm(); setCreating(true); }
+  function openEdit(agent: Agent) {
+    const guardrails = agent.guardrails ?? {};
+    const allowedTopics = Array.isArray(guardrails.allowed_topics) ? guardrails.allowed_topics.filter((topic): topic is string => typeof topic === "string") : [];
+    setEditingAgent(agent); setName(agent.agent_name); setDescription(agent.description); setModelId(agent.model_id);
+    setSystemPrompt(agent.system_prompts[0] ?? ""); setWorkflow(agent.workflow); setTools(agent.tooling.map((tool) => ({ ...tool })));
+    setTopics(allowedTopics.join(", ")); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
+    setStep(1); setError(""); setCreating(true);
+  }
 
   function closeModal() {
     if (saving) return;
     setCreating(false);
-    setStep(1);
-    setError("");
+    resetForm();
   }
 
   useEffect(() => {
@@ -240,25 +268,36 @@ function AgentManager({ agents, onCreated, onBack }: { agents: Agent[]; onCreate
   }
   async function save() {
     setSaving(true); setError("");
-    const guardrails: Record<string, unknown> = {};
+    const guardrails: Record<string, unknown> = editingAgent ? { ...editingAgent.guardrails } : {};
     const allowedTopics = topics.split(",").map((topic) => topic.trim()).filter(Boolean);
-    if (allowedTopics.length) guardrails.allowed_topics = allowedTopics;
-    if (fallback.trim()) guardrails.out_of_scope_response = fallback.trim();
-    const payload: AgentCreate = {
+    if (allowedTopics.length) guardrails.allowed_topics = allowedTopics; else delete guardrails.allowed_topics;
+    if (fallback.trim()) guardrails.out_of_scope_response = fallback.trim(); else delete guardrails.out_of_scope_response;
+    const updatePayload: AgentUpdate = {
       agent_name: name.trim(), description: description.trim(), workflow: workflow.trim(), model_id: selectedModel.id,
-      model_type: selectedModel.type, system_prompts: systemPrompt.trim() ? [systemPrompt.trim()] : [], user_prompts: [],
-      tooling: tools, guardrails, owner_email: USER_PROFILE.emailId, created_by: USER_PROFILE.emailId, shared_with: [],
+      model_type: selectedModel.type, system_prompts: systemPrompt.trim() ? [systemPrompt.trim()] : [], tooling: tools, guardrails,
     };
-    try { onCreated(await createAgent(payload)); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not create agent."); }
+    try {
+      if (editingAgent) {
+        onUpdated(await updateAgent(editingAgent.agent_id, updatePayload));
+        setCreating(false); resetForm();
+      } else {
+        const createPayload: AgentCreate = { ...updatePayload as Omit<Agent, "agent_id">, user_prompts: [], owner_email: USER_PROFILE.emailId, created_by: USER_PROFILE.emailId, shared_with: [] };
+        onCreated(await createAgent(createPayload));
+      }
+    }
+    catch (reason) { setError(reason instanceof Error ? reason.message : editingAgent ? "Could not update agent." : "Could not create agent."); }
     finally { setSaving(false); }
   }
 
-  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><button className="primary-button" onClick={() => setCreating(true)}>Create agent</button></div><div className="agent-grid">{agents.map((agent) => <article className="agent-card" key={agent.agent_id}><h2>{agent.agent_name}</h2><p>{agent.description || "No description provided."}</p><small>{agent.model_id}</small></article>)}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">CREATE AGENT</p><h1 id="create-agent-title">New agent</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label="Close new agent dialog">×</button></div><div className="wizard-steps" aria-label="Creation progress">{["Details", "Tools & guardrails", "Review"].map((label, index) => <span className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} key={label}>{index + 1}. {label}</span>)}</div><div className="agent-wizard">
-    {step === 1 && <div className="wizard-fields"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><label>Model<select value={modelId} onChange={(event) => setModelId(event.target.value)}>{MODEL_OPTIONS.map((model) => <option value={model.id} key={model.id}>{model.label}</option>)}</select></label><label>System prompt<textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={5} placeholder="Instructions for the agent" /></label><label>Workflow<textarea value={workflow} onChange={(event) => setWorkflow(event.target.value)} rows={4} placeholder="Describe the process this agent should follow" /></label></div>}
+  const agentQuery = search.trim().toLocaleLowerCase();
+  const visibleAgents = agents.filter((agent) => !agentQuery || [agent.agent_name, agent.description, agent.model_id].some((value) => value.toLocaleLowerCase().includes(agentQuery)))
+    .sort((left, right) => left.agent_name.localeCompare(right.agent_name, undefined, { sensitivity: "base" }));
+
+  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><button type="button" className="text-button" onClick={() => openEdit(agent)}>Edit</button></div><p>{agent.description || "No description provided."}</p><small>{agent.model_id}</small></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>{["Details", "Tools & guardrails", "Review"].map((label, index) => <span className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} key={label}>{index + 1}. {label}</span>)}</div><div className="agent-wizard">
+    {step === 1 && <div className="wizard-fields"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><label>Model<select value={modelId} onChange={(event) => setModelId(event.target.value)}>{availableModels.map((model) => <option value={model.id} key={model.id}>{model.label}</option>)}</select></label><label>System prompt<textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={5} placeholder="Instructions for the agent" /></label><label>Workflow<textarea value={workflow} onChange={(event) => setWorkflow(event.target.value)} rows={4} placeholder="Describe the process this agent should follow" /></label></div>}
     {step === 2 && <div className="wizard-fields"><div className="field-heading"><div><h2>Tools</h2><p>Add trusted Python tools this agent can call.</p></div><button className="secondary-button" onClick={() => setTools((items) => [...items, { name: "", description: "", source_code: "", enabled: true }])}>Add tool</button></div>{tools.map((tool, index) => <div className="tool-editor" key={index}><button className="remove-button" onClick={() => setTools((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button><label>Name<input value={tool.name} onChange={(event) => updateTool(index, "name", event.target.value)} /></label><label>Description<input value={tool.description} onChange={(event) => updateTool(index, "description", event.target.value)} /></label><label>Python source<textarea value={tool.source_code} onChange={(event) => updateTool(index, "source_code", event.target.value)} rows={6} /></label><label className="checkbox-label"><input type="checkbox" checked={tool.enabled} onChange={(event) => updateTool(index, "enabled", event.target.checked)} /> Enabled</label></div>)}<div className="guardrails"><h2>Guardrails</h2><label>Allowed topics<input value={topics} onChange={(event) => setTopics(event.target.value)} placeholder="finance, portfolio analysis" /></label><label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={3} /></label></div></div>}
-    {step === 3 && <div className="review"><h2>Review your agent</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd>{systemPrompt || "None"}</dd><dt>Workflow</dt><dd>{workflow || "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Allowed topics</dt><dd>{topics || "None"}</dd></dl></div>}
-    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 3 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? "Creating…" : "Create agent"}</button>}</div>
+    {step === 3 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd>{systemPrompt || "None"}</dd><dt>Workflow</dt><dd>{workflow || "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Allowed topics</dt><dd>{topics || "None"}</dd></dl></div>}
+    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 3 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</button>}</div>
   </div></section></div>}</div>;
 }
 
@@ -518,6 +557,10 @@ export default function App() {
     setPrompt("");
   }
 
+  function agentUpdated(agent: Agent) {
+    setAgents((items) => items.map((item) => item.agent_id === agent.agent_id ? agent : item));
+  }
+
   const conversationAgentName = agents.find((agent) => agent.agent_id === active?.agentId)?.agent_name ?? selectedAgentName;
   const activeConversationLoading = conversationLoadingId === active?.id;
   const activeHistoryPending = Boolean(active?.sessionId && !active.historyLoaded);
@@ -526,7 +569,7 @@ export default function App() {
     <aside className={sidebarExpanded ? "sidebar expanded" : "sidebar"} onPointerEnter={() => setSidebarExpanded(true)} onPointerLeave={() => setSidebarExpanded(false)} onPointerUp={(event) => { if ((event.target as Element).closest("button,a")) setSidebarExpanded(false); }} onFocusCapture={() => setSidebarExpanded(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSidebarExpanded(false); }}>
       <div className="brand"><span className="brand-monogram" title="Deln Bank" aria-label="Deln Bank">A</span><span className="brand-name">AI Harness</span></div>
       <button className="new-chat" onClick={newChat} aria-label="New chat" title="New chat"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span className="sidebar-label">New chat</span></button>
-      <nav className="nav-links"><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/agents" title="Agents"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3" /><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.5a3 3 0 0 1 0 5.8M16 14c2.8.3 5 2.7 5 5.5" /></svg><span className="sidebar-label">Agents</span></NavLink><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/marketplace" title="Marketplace"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16l-1 11H5L4 9Z" /><path d="M8 9V6a4 4 0 0 1 8 0v3" /></svg><span className="sidebar-label">Marketplace</span></NavLink><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/analytics" title="Analytics"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" /><path d="m7 15 4-4 3 2 5-6" /></svg><span className="sidebar-label">Analytics</span></NavLink></nav>
+      <nav className="nav-links"><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/agents" title="Agents"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3" /><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.5a3 3 0 0 1 0 5.8M16 14c2.8.3 5 2.7 5 5.5" /></svg><span className="sidebar-label">Agents</span></NavLink><button className="nav-item disabled" type="button" disabled title="Initiatives — Coming soon" aria-label="Initiatives — Coming soon"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" /></svg><span className="sidebar-label">Initiatives</span></button><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/marketplace" title="Marketplace"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16l-1 11H5L4 9Z" /><path d="M8 9V6a4 4 0 0 1 8 0v3" /></svg><span className="sidebar-label">Marketplace</span></NavLink><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/analytics" title="Analytics"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" /><path d="m7 15 4-4 3 2 5-6" /></svg><span className="sidebar-label">Analytics</span></NavLink></nav>
       <section className="conversation-history" aria-label="Conversations">
         <div className="conversation-heading"><div className="conversation-heading-title"><svg className="conversation-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14A2.5 2.5 0 0 1 21.5 8v7A2.5 2.5 0 0 1 19 17.5H10l-4.5 3v-3A2.5 2.5 0 0 1 3 15V8a2.5 2.5 0 0 1 2-2.5Z" /><path d="M8 11h8M8 14h5" /></svg><span className="section-label sidebar-label">Conversations</span></div><span className="section-divider" aria-hidden="true" /></div>
         <div className="history">{conversationsLoading ? <div className="conversation-loading" role="status" aria-label="Loading conversations"><span /><span /><span /></div> : sidebarConversations.map((conversation) => <button className={view === "chat" && conversation.id === activeId ? "history-item active" : "history-item"} key={conversation.id} onClick={() => openConversation(conversation)} title={conversation.title} aria-label={conversation.title}><svg className="history-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14A2.5 2.5 0 0 1 21.5 8v7A2.5 2.5 0 0 1 19 17.5H10l-4.5 3v-3A2.5 2.5 0 0 1 3 15V8a2.5 2.5 0 0 1 2-2.5Z" /></svg><span className="history-label">{conversation.title}</span></button>)}</div>
@@ -535,7 +578,7 @@ export default function App() {
     </aside>
     <section className={view === "chat" ? "workspace" : "workspace content-workspace"}>
       <Routes><Route path="/" element={<Navigate to="/chat" replace />} /><Route path="/chat" element={null} /><Route path="/conversations/:sessionId" element={null} /><Route path="/agents" element={null} /><Route path="/marketplace" element={null} /><Route path="/analytics" element={null} /><Route path="*" element={<Navigate to="/chat" replace />} /></Routes>
-      {view === "agents" ? <AgentManager agents={agents} onCreated={agentCreated} onBack={() => navigate("/chat")} /> : view === "marketplace" ? <Marketplace /> : view === "analytics" ? <AnalyticsDashboard /> : <>
+      {view === "agents" ? <AgentManager agents={agents} onCreated={agentCreated} onUpdated={agentUpdated} /> : view === "marketplace" ? <Marketplace /> : view === "analytics" ? <AnalyticsDashboard /> : <>
       <header className="topbar"><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
       <div ref={chatBodyRef} className={active?.messages.length || activeConversationLoading ? "chat-body transcript" : "chat-body welcome"}>
         {activeConversationLoading && <div className="transcript-loading" role="status" aria-label="Loading conversation"><span /><span /><span /><p>Loading conversation</p></div>}

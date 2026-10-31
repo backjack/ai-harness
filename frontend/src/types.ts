@@ -13,6 +13,7 @@ export type Agent = {
 };
 
 export type AgentCreate = Omit<Agent, "agent_id"> & { owner_email: string; created_by: string; shared_with: string[]; user_prompts: string[] };
+export type AgentUpdate = Partial<Omit<Agent, "agent_id">>;
 
 export type ChartContent = {
   library: "highcharts";

@@ -1,4 +1,4 @@
-import type { Agent, AgentCreate, AnalyticsReport, ChatEvent, ConversationDetail, ConversationSummary } from "./types";
+import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, ChatEvent, ConversationDetail, ConversationSummary } from "./types";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
@@ -17,6 +17,19 @@ export async function createAgent(body: AgentCreate): Promise<Agent> {
   if (!response.ok) {
     const error = await response.json().catch(() => null) as { detail?: string } | null;
     throw new Error(error?.detail ?? "Could not create agent");
+  }
+  return response.json() as Promise<Agent>;
+}
+
+export async function updateAgent(agentId: string, body: AgentUpdate): Promise<Agent> {
+  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(agentId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(error?.detail ?? "Could not update agent");
   }
   return response.json() as Promise<Agent>;
 }
