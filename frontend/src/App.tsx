@@ -27,6 +27,30 @@ function MessageContent({ message }: { message: ChatMessage }) {
   return <div className="message-text markdown-content"><ReactMarkdown>{String(message.content)}</ReactMarkdown></div>;
 }
 
+function responseText(message: ChatMessage) {
+  return typeof message.content === "string" ? message.content : JSON.stringify(message.content, null, 2);
+}
+
+function MessageActions({ message }: { message: ChatMessage }) {
+  const [status, setStatus] = useState("");
+
+  async function copy(value: string, success: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setStatus(success);
+    } catch {
+      setStatus("Could not access clipboard");
+    }
+    window.setTimeout(() => setStatus(""), 1800);
+  }
+
+  return <div className="message-actions">
+    <button type="button" onClick={() => void copy(responseText(message), "Copied")}>Copy</button>
+    <button type="button" onClick={() => void copy(window.location.href, "Link copied")}>Share</button>
+    <span aria-live="polite">{status}</span>
+  </div>;
+}
+
 function createConversation(agentId: string): Conversation {
   return { id: crypto.randomUUID(), agentId, historyLoaded: true, title: "New conversation", messages: [] };
 }
@@ -79,8 +103,58 @@ const MARKETPLACE_APPS = [
   { name: "Tax Impact Analyzer", category: "Tax", icon: "TA", description: "Estimate how portfolio decisions may affect realized gains and tax exposure." },
 ];
 
+type McpServer = { name: string; description: string; endpoint: string; transport: string };
+type MarketplaceTool = AgentTool;
+
+const MARKETPLACE_MCP_SERVERS: McpServer[] = [
+  { name: "Market Data MCP", description: "Live quotes, historical prices, and market indices for investment workflows.", endpoint: "https://mcp.example.com/market-data", transport: "Streamable HTTP" },
+  { name: "Portfolio Data MCP", description: "Connect holdings, balances, transactions, and account-level portfolio data.", endpoint: "https://mcp.example.com/portfolios", transport: "Streamable HTTP" },
+  { name: "Financial News MCP", description: "Search current company, sector, and macroeconomic news from one source.", endpoint: "https://mcp.example.com/news", transport: "SSE" },
+];
+
+const MARKETPLACE_TOOLS: MarketplaceTool[] = [
+  { name: "get_stock_price", description: "Retrieve the latest available market price for a ticker.", source_code: "def get_stock_price(symbol: str): ...", enabled: true },
+  { name: "calculate_net_worth", description: "Calculate net worth from cash balances and current stock holdings.", source_code: "def calculate_net_worth(holdings: list, cash: float): ...", enabled: true },
+  { name: "portfolio_risk", description: "Summarize allocation, concentration, and volatility risk for a portfolio.", source_code: "def portfolio_risk(holdings: list): ...", enabled: true },
+];
+
 function Marketplace() {
-  return <section className="content-page"><header className="content-page-header"><div><p className="eyebrow">DISCOVER</p><h1>Marketplace</h1><p>Explore sample financial apps that can be built with AI Harness agents.</p></div></header><div className="marketplace-grid">{MARKETPLACE_APPS.map((app) => <article className="marketplace-card" key={app.name}><div className="marketplace-icon" aria-hidden="true">{app.icon}</div><div><span className="marketplace-category">{app.category}</span><h2>{app.name}</h2><p>{app.description}</p></div><span className="sample-badge">Sample app</span></article>)}</div></section>;
+  const [tab, setTab] = useState<"apps" | "mcp" | "tools">("apps");
+  const [mcpServers, setMcpServers] = useState(MARKETPLACE_MCP_SERVERS);
+  const [tools, setTools] = useState(MARKETPLACE_TOOLS);
+  const [dialog, setDialog] = useState<"mcp" | "tool" | null>(null);
+  const [formError, setFormError] = useState("");
+  const [mcpForm, setMcpForm] = useState<McpServer>({ name: "", description: "", endpoint: "", transport: "Streamable HTTP" });
+  const [toolForm, setToolForm] = useState<MarketplaceTool>({ name: "", description: "", source_code: "", enabled: true });
+
+  function closeDialog() { setDialog(null); setFormError(""); }
+  function registerMcp(event: FormEvent) {
+    event.preventDefault();
+    if (!mcpForm.name.trim() || !mcpForm.description.trim() || !mcpForm.endpoint.trim()) { setFormError("Name, description, and endpoint are required."); return; }
+    try { new URL(mcpForm.endpoint); } catch { setFormError("Enter a valid endpoint URL."); return; }
+    setMcpServers((items) => [...items, { ...mcpForm, name: mcpForm.name.trim(), description: mcpForm.description.trim(), endpoint: mcpForm.endpoint.trim() }]);
+    setMcpForm({ name: "", description: "", endpoint: "", transport: "Streamable HTTP" }); closeDialog();
+  }
+  function createTool(event: FormEvent) {
+    event.preventDefault();
+    if (!toolForm.name.trim() || !toolForm.description.trim() || !toolForm.source_code.trim()) { setFormError("Name, description, and Python source are required."); return; }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(toolForm.name.trim())) { setFormError("Tool name must be a valid Python identifier."); return; }
+    setTools((items) => [...items, { ...toolForm, name: toolForm.name.trim(), description: toolForm.description.trim(), source_code: toolForm.source_code.trim() }]);
+    setToolForm({ name: "", description: "", source_code: "", enabled: true }); closeDialog();
+  }
+
+  return <section className="content-page marketplace-page"><header className="content-page-header"><div><p className="eyebrow">DISCOVER</p><h1>Marketplace</h1><p>Explore apps, integrations, and reusable tools for AI Harness agents.</p></div>{tab === "mcp" ? <button className="primary-button" onClick={() => setDialog("mcp")}>Register MCP Server</button> : tab === "tools" ? <button className="primary-button" onClick={() => setDialog("tool")}>Create a Tool</button> : null}</header>
+    <div className="marketplace-tabs" role="tablist" aria-label="Marketplace categories" onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const tabs = ["apps", "mcp", "tools"] as const; const next = (tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length; setTab(tabs[next]); requestAnimationFrame(() => document.getElementById(`marketplace-tab-${tabs[next]}`)?.focus()); }}>{([ ["apps", "Apps"], ["mcp", "MCP Servers"], ["tools", "Agent Tools"] ] as const).map(([id, label]) => <button id={`marketplace-tab-${id}`} type="button" role="tab" tabIndex={tab === id ? 0 : -1} aria-selected={tab === id} aria-controls={`marketplace-${id}`} className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}</div>
+    <div id={`marketplace-${tab}`} role="tabpanel" aria-labelledby={`marketplace-tab-${tab}`} className="marketplace-grid">
+      {tab === "apps" && MARKETPLACE_APPS.map((app) => <article className="marketplace-card" key={app.name}><div className="marketplace-icon" aria-hidden="true">{app.icon}</div><div><span className="marketplace-category">{app.category}</span><h2>{app.name}</h2><p>{app.description}</p></div><span className="sample-badge">Sample app</span></article>)}
+      {tab === "mcp" && mcpServers.map((server) => <article className="marketplace-card catalog-card" key={`${server.name}-${server.endpoint}`}><div className="marketplace-icon" aria-hidden="true">MCP</div><div><span className="marketplace-category">{server.transport}</span><h2>{server.name}</h2><p>{server.description}</p><code>{server.endpoint}</code></div></article>)}
+      {tab === "tools" && tools.map((tool) => <article className="marketplace-card catalog-card" key={tool.name}><div className="marketplace-icon" aria-hidden="true">AT</div><div><span className="marketplace-category">{tool.enabled ? "Enabled" : "Disabled"}</span><h2>{tool.name}</h2><p>{tool.description}</p><code>{tool.source_code}</code></div></article>)}
+    </div>
+    {dialog && <div className="marketplace-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}><section className="marketplace-dialog" role="dialog" aria-modal="true" aria-labelledby="marketplace-dialog-title"><div className="agent-modal-header"><div><p className="eyebrow">MARKETPLACE</p><h1 id="marketplace-dialog-title">{dialog === "mcp" ? "Register MCP Server" : "Create a Tool"}</h1></div><button className="modal-close" type="button" onClick={closeDialog} aria-label="Close dialog">×</button></div>
+      {dialog === "mcp" ? <form className="marketplace-form" onSubmit={registerMcp}><label>Name<input value={mcpForm.name} onChange={(event) => setMcpForm({ ...mcpForm, name: event.target.value })} /></label><label>Description<textarea rows={3} value={mcpForm.description} onChange={(event) => setMcpForm({ ...mcpForm, description: event.target.value })} /></label><label>Endpoint URL<input type="url" placeholder="https://mcp.example.com/server" value={mcpForm.endpoint} onChange={(event) => setMcpForm({ ...mcpForm, endpoint: event.target.value })} /></label><label>Transport<select value={mcpForm.transport} onChange={(event) => setMcpForm({ ...mcpForm, transport: event.target.value })}><option>Streamable HTTP</option><option>SSE</option></select></label>{formError && <div className="error-banner">{formError}</div>}<div className="marketplace-form-actions"><button type="button" className="secondary-button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit">Register</button></div></form>
+      : <form className="marketplace-form" onSubmit={createTool}><label>Name<input placeholder="get_stock_price" value={toolForm.name} onChange={(event) => setToolForm({ ...toolForm, name: event.target.value })} /></label><label>Description<textarea rows={3} value={toolForm.description} onChange={(event) => setToolForm({ ...toolForm, description: event.target.value })} /></label><label>Python source<textarea rows={7} value={toolForm.source_code} onChange={(event) => setToolForm({ ...toolForm, source_code: event.target.value })} /></label><label className="checkbox-label"><input type="checkbox" checked={toolForm.enabled} onChange={(event) => setToolForm({ ...toolForm, enabled: event.target.checked })} /> Enabled</label>{formError && <div className="error-banner">{formError}</div>}<div className="marketplace-form-actions"><button type="button" className="secondary-button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit">Create Tool</button></div></form>}
+    </section></div>}
+  </section>;
 }
 
 function columnChart(title: string, categories: string[], series: Array<{ name: string; data: number[] }>, valueSuffix = ""): Highcharts.Options {
@@ -450,7 +524,7 @@ export default function App() {
 
   return <main className="app-shell">
     <aside className={sidebarExpanded ? "sidebar expanded" : "sidebar"} onPointerEnter={() => setSidebarExpanded(true)} onPointerLeave={() => setSidebarExpanded(false)} onPointerUp={(event) => { if ((event.target as Element).closest("button,a")) setSidebarExpanded(false); }} onFocusCapture={() => setSidebarExpanded(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSidebarExpanded(false); }}>
-      <div className="brand"><span className="brand-monogram" title="Deln Bank" aria-label="Deln Bank">D</span><span className="brand-name">AI Harness</span></div>
+      <div className="brand"><span className="brand-monogram" title="Deln Bank" aria-label="Deln Bank">A</span><span className="brand-name">AI Harness</span></div>
       <button className="new-chat" onClick={newChat} aria-label="New chat" title="New chat"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span className="sidebar-label">New chat</span></button>
       <nav className="nav-links"><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/agents" title="Agents"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3" /><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 4.5a3 3 0 0 1 0 5.8M16 14c2.8.3 5 2.7 5 5.5" /></svg><span className="sidebar-label">Agents</span></NavLink><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/marketplace" title="Marketplace"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16l-1 11H5L4 9Z" /><path d="M8 9V6a4 4 0 0 1 8 0v3" /></svg><span className="sidebar-label">Marketplace</span></NavLink><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/analytics" title="Analytics"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" /><path d="m7 15 4-4 3 2 5-6" /></svg><span className="sidebar-label">Analytics</span></NavLink></nav>
       <section className="conversation-history" aria-label="Conversations">
@@ -465,8 +539,8 @@ export default function App() {
       <header className="topbar"><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
       <div ref={chatBodyRef} className={active?.messages.length || activeConversationLoading ? "chat-body transcript" : "chat-body welcome"}>
         {activeConversationLoading && <div className="transcript-loading" role="status" aria-label="Loading conversation"><span /><span /><span /><p>Loading conversation</p></div>}
-        {!activeConversationLoading && !active?.messages.length && <div className="welcome-content"><p className="eyebrow">AI HARNESS</p><h1>Where should we start?</h1><p>Ask your configured AI agent anything.</p><div className="suggestions"><button onClick={() => setPrompt("Analyse my portfolio allocation")}>Analyse my portfolio allocation</button><button onClick={() => setPrompt("Get the latest price for AAPL")}>Get a current stock price</button><button onClick={() => setPrompt("Summarise market risk for this week")}>Summarise market risk</button></div></div>}
-        {active?.messages.map((message, index) => <article key={`${message.role}-${index}`} className={`message ${message.role}`}><div className="message-card"><div className="message-meta">{message.role === "assistant" ? <><span className="agent-avatar" aria-hidden="true">SP</span><span className="agent-status" title="Available" aria-label="Available" /><span>{conversationAgentName}</span></> : <span className="user-avatar">You</span>}</div>{message.response ? <MessageContent message={message.response} /> : <div className="message-text">{message.content}</div>}<time className="message-time">{formatMessageTime(message.createdAt) ?? "Just now"}</time></div></article>)}
+        {!activeConversationLoading && !active?.messages.length && <div className="welcome-content"><p className="eyebrow">AI HARNESS</p><h1>Where should we start?</h1><p>Ask your configured AI agent anything.</p><div className="suggestions"><button onClick={() => setPrompt("Analyse my portfolio allocation")}>Analyse my portfolio allocation</button><button onClick={() => setPrompt("Get the latest price for AAPL")}>Get a current stock price</button><button onClick={() => setPrompt("Calculate my net worth with stock holdings")}>Calculate my net worth with stock holdings</button></div></div>}
+        {active?.messages.map((message, index) => <article key={`${message.role}-${index}`} className={`message ${message.role}`}><div className="message-card"><div className="message-meta">{message.role === "assistant" ? <><span className="agent-avatar" aria-hidden="true">SP</span><span className="agent-status" title="Available" aria-label="Available" /><span>{conversationAgentName}</span></> : <span className="user-avatar">You</span>}</div>{message.response ? <MessageContent message={message.response} /> : <div className="message-text">{message.content}</div>}<time className="message-time">{formatMessageTime(message.createdAt) ?? "Just now"}</time>{message.role === "assistant" && message.response && <MessageActions message={message.response} />}</div></article>)}
         {tasks.length > 0 && <section className={tasksCompleting ? "task-list is-completing" : "task-list"} aria-live="polite"><span>Working</span>{tasks.map((task) => <div className="task-row" key={task}><i /><span>{task}</span></div>)}</section>}
         {error && <div className="error-banner">{error}</div>}
       </div>
