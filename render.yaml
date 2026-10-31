@@ -1,0 +1,25 @@
+services:
+  - type: web
+    runtime: docker
+    name: ai-harness
+    plan: free
+    branch: feature/ai-harness-20261031
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MYSQL_HOST
+        sync: false
+      - key: MYSQL_PORT
+        sync: false
+      - key: MYSQL_USER
+        sync: false
+      - key: MYSQL_PASSWORD
+        sync: false
+      - key: MYSQL_DATABASE
+        sync: false
+      - key: MYSQL_SSL_CA
+        value: resources/certs/ca.pem
