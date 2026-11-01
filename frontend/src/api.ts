@@ -21,8 +21,11 @@ async function apiNoContent(path: string, init: RequestInit): Promise<void> {
 
 export const getToolSources = () => apiJson<ToolSource[]>("/tool-sources");
 export const getTools = (query = "") => apiJson<ToolDefinition[]>(`/tools${query ? `?${query}` : ""}`);
-export const registerMcpSource = (body: { name: string; description?: string; endpoint: string; owner_email: string }) => apiJson<ToolSource & { test: unknown }>("/tool-sources/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-export const testToolSource = (sourceId: string) => apiJson<{ status: string; tool_count: number; error: string | null; duration_ms: number }>(`/tool-sources/${encodeURIComponent(sourceId)}/test`, { method: "POST" });
+export type ToolSourceTest = { source_id: string; status: "available" | "unavailable"; tool_count: number; error: string | null; duration_ms: number };
+export const getToolsForSource = (sourceId: string) => getTools(new URLSearchParams({ source_id: sourceId }).toString());
+export const registerMcpSource = (body: { name: string; description?: string; endpoint: string; owner_email: string }) => apiJson<ToolSource & { test: ToolSourceTest }>("/tool-sources/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const updateMcpSource = (sourceId: string, body: { name: string; description?: string; endpoint: string }) => apiJson<ToolSource & { test: ToolSourceTest }>(`/tool-sources/${encodeURIComponent(sourceId)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const testToolSource = (sourceId: string) => apiJson<ToolSourceTest>(`/tool-sources/${encodeURIComponent(sourceId)}/test`, { method: "POST" });
 export const createCustomTool = (body: Record<string, unknown>) => apiJson<ToolDefinition>("/tools/custom", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const testLibraryTool = (toolId: string, arguments_: Record<string, unknown>, invokedBy: string) => apiJson<ToolTestResult>(`/tools/${encodeURIComponent(toolId)}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ arguments: arguments_, invoked_by: invokedBy }) });
 export const deleteToolSource = (sourceId: string) => apiNoContent(`/tool-sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" });

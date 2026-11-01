@@ -14,7 +14,8 @@ from controllers.service_status import _classify_message
 from services.analytics import get_analytics_report
 from services.agent_repository import _decode_agent, _serialize_agent_values
 from services.chat_events import ChatEventSink
-from services.tool_library import discover_source
+from services.mcp_client import call_mcp_tool as execute_mcp_call
+from services.tool_library import discover_source, test_tool as execute_library_tool
 from utils.config import get_config
 from services.model_execution import (
     ModelExecution,
@@ -29,7 +30,7 @@ from services.tool_runtime import (
     build_langchain_tools,
     validate_tool_definitions,
 )
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 
 client = TestClient(app)
@@ -439,6 +440,76 @@ def test_chat_returns_model_response(monkeypatch) -> None:
         "type": "markdown",
         "content": "Hi there!",
     }
+
+
+def test_conversation_guardrail_blocks_before_model_and_tools() -> None:
+    from services.conversation_agent import ConversationAgent
+
+    calls: list[str] = []
+
+    class FakeExecutor:
+        async def classify_guardrail(self, policy: str, prompt: str, history: list[object]) -> bool:
+            calls.append("classify")
+            assert policy == "Only provide financial guidance."
+            assert prompt == "Write malware"
+            assert len(history) == 1
+            return False
+
+        async def execute_with_metadata(self, *args: object, **kwargs: object) -> ModelResponse:
+            calls.append("execute")
+            return ModelResponse("should not run")
+
+    events: list[dict[str, object]] = []
+    runtime = ConversationAgent(
+        agent_id="agent-1", session_id="session-1", system_prompts=[], executor=FakeExecutor(),
+        history=[HumanMessage(content="Earlier context")],
+        guardrails={"policy_text": "Only provide financial guidance.", "out_of_scope_response": "Request blocked."},
+        tools=[object()], definition_signature="signature",
+    )
+
+    result = asyncio.run(runtime.execute("Write malware", events.append))
+
+    assert result.text == "Request blocked."
+    assert calls == ["classify"]
+    assert events[-1]["event"] == "runtime.guardrail.evaluate.blocked"
+
+
+def test_conversation_guardrail_allows_normal_execution() -> None:
+    from services.conversation_agent import ConversationAgent
+
+    class FakeExecutor:
+        async def classify_guardrail(self, *args: object) -> bool:
+            return True
+
+        async def execute_with_metadata(self, *args: object, **kwargs: object) -> ModelResponse:
+            return ModelResponse("Allowed response")
+
+    runtime = ConversationAgent(
+        agent_id="agent-1", session_id="session-1", system_prompts=[], executor=FakeExecutor(), history=[],
+        guardrails={"policy_text": "Only provide financial guidance.", "out_of_scope_response": "Blocked."},
+        tools=[], definition_signature="signature",
+    )
+
+    assert asyncio.run(runtime.execute("Explain an invoice")).text == "Allowed response"
+
+
+def test_conversation_guardrail_classifier_failure_blocks_safely() -> None:
+    from services.conversation_agent import ConversationAgent
+
+    class FailingExecutor:
+        async def classify_guardrail(self, *args: object) -> bool:
+            raise ValueError("invalid classifier output")
+
+    runtime = ConversationAgent(
+        agent_id="agent-1", session_id="session-1", system_prompts=[], executor=FailingExecutor(), history=[],
+        guardrails={"allowed_topics": ["finance"], "out_of_scope_response": "Safe fallback."},
+        tools=[], definition_signature="signature",
+    )
+
+    result = asyncio.run(runtime.execute("Anything"))
+
+    assert result.text == "Safe fallback."
+    assert result.attributes["guardrail"]["classification_failed"] is True
 
 
 def test_chat_stream_emits_model_progress_then_final_response(monkeypatch) -> None:
@@ -1008,6 +1079,243 @@ def test_mcp_registration_is_saved_when_discovery_is_unavailable(monkeypatch) ->
     assert response.json()["test"]["status"] == "unavailable"
 
 
+def test_mcp_source_update_saves_and_rediscovers_only_requested_source(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def update(source_id: str, values: dict[str, object]) -> dict[str, object]:
+        captured.update({"updated_source_id": source_id, "values": values})
+        return {"source_id": source_id, "source_type": "mcp", **values, "owner_email": "owner@example.com"}
+
+    async def discover(source_id: str) -> dict[str, object]:
+        captured["discovered_source_id"] = source_id
+        return {"source_id": source_id, "status": "available", "tool_count": 2, "error": None, "duration_ms": 8}
+
+    monkeypatch.setattr("controllers.tool_library.update_source", update)
+    monkeypatch.setattr("controllers.tool_library.discover_source", discover)
+
+    response = client.patch("/api/tool-sources/source-1", json={
+        "name": "Updated server", "description": "Updated description", "endpoint": "https://updated.example.com/mcp",
+    })
+
+    assert response.status_code == 200
+    assert captured["updated_source_id"] == "source-1"
+    assert captured["discovered_source_id"] == "source-1"
+    assert response.json()["test"]["tool_count"] == 2
+
+
+def test_mcp_source_update_returns_not_found(monkeypatch) -> None:
+    monkeypatch.setattr("controllers.tool_library.update_source", lambda source_id, values: None)
+
+    response = client.patch("/api/tool-sources/missing", json={
+        "name": "Missing", "description": None, "endpoint": "https://missing.example.com/mcp",
+    })
+
+    assert response.status_code == 404
+
+
+def test_mcp_source_test_targets_requested_source(monkeypatch) -> None:
+    captured: list[str] = []
+
+    async def discover(source_id: str) -> dict[str, object]:
+        captured.append(source_id)
+        return {"source_id": source_id, "status": "available", "tool_count": 1, "error": None, "duration_ms": 4}
+
+    monkeypatch.setattr("controllers.tool_library.discover_source", discover)
+
+    response = client.post("/api/tool-sources/source-2/test")
+
+    assert response.status_code == 200
+    assert captured == ["source-2"]
+
+
+def _install_tool_execution_fakes(monkeypatch, captured: list[tuple[object, ...]]) -> None:
+    class Cursor:
+        def execute(self, query: str, params: tuple[object, ...]) -> None:
+            captured.append(params)
+
+        def close(self) -> None:
+            return None
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class Pool:
+        def get_connection(self):
+            return Connection()
+
+    monkeypatch.setattr("services.tool_library.get_tool", lambda tool_id: {
+        "tool_definition_id": tool_id, "connection_type": "mcp", "endpoint": "https://example.test/mcp",
+        "external_name": "cm_get_equity_stocks", "description": "Get equities",
+    })
+    monkeypatch.setattr("services.tool_library.get_connection_pool", lambda: Pool())
+
+
+def test_mcp_tool_execution_unwraps_task_group_error(monkeypatch) -> None:
+    captured: list[tuple[object, ...]] = []
+
+    async def failing_call(endpoint: str, name: str, arguments: dict[str, object]):
+        raise ExceptionGroup("unhandled errors in a TaskGroup", [RuntimeError("upstream service unavailable")])
+
+    _install_tool_execution_fakes(monkeypatch, captured)
+    monkeypatch.setattr("services.tool_library.call_mcp_tool", failing_call)
+    result = asyncio.run(execute_library_tool("tool-1", {"symbolFilter": "TCS", "limit": 50}, "owner@example.com"))
+
+    assert result["outcome"] == "error"
+    assert result["error"] == "RuntimeError: upstream service unavailable"
+    assert "ExceptionGroup" not in result["error"]
+    assert captured[-1][4] == "error"
+
+
+def test_mcp_tool_execution_honors_error_result(monkeypatch) -> None:
+    captured: list[tuple[object, ...]] = []
+
+    class Result:
+        is_error = True
+
+        def model_dump(self, *, mode: str) -> dict[str, object]:
+            return {"content": [{"type": "text", "text": "Invalid symbol filter"}], "is_error": True}
+
+    async def error_call(endpoint: str, name: str, arguments: dict[str, object]):
+        return Result()
+
+    _install_tool_execution_fakes(monkeypatch, captured)
+    monkeypatch.setattr("services.tool_library.call_mcp_tool", error_call)
+    result = asyncio.run(execute_library_tool("tool-1", {"symbolFilter": "TCS", "limit": 50}, "owner@example.com"))
+
+    assert result["outcome"] == "error"
+    assert result["error"] == "Invalid symbol filter"
+    assert result["output"]["is_error"] is True
+    assert captured[-1][4] == "error"
+
+
+def test_mcp_tool_execution_passes_endpoint_and_preserves_arguments(monkeypatch) -> None:
+    captured: list[tuple[object, ...]] = []
+    events: list[object] = []
+    arguments = {"symbolFilter": "TCS", "limit": 50}
+
+    class Result:
+        is_error = False
+
+        def model_dump(self, *, mode: str) -> dict[str, object]:
+            return {"content": [{"type": "text", "text": "TCS"}], "is_error": False}
+
+    async def successful_call(endpoint: str, name: str, received: dict[str, object]):
+        events.append((endpoint, name, received))
+        return Result()
+
+    _install_tool_execution_fakes(monkeypatch, captured)
+    monkeypatch.setattr("services.tool_library.call_mcp_tool", successful_call)
+    result = asyncio.run(execute_library_tool("tool-1", arguments, "owner@example.com"))
+
+    assert result["outcome"] == "success"
+    assert events == [("https://example.test/mcp", "cm_get_equity_stocks", arguments)]
+    assert json.loads(captured[-1][2]) == arguments
+
+
+def test_mcp_call_uses_metadata_session_then_fresh_execution_session(monkeypatch) -> None:
+    events: list[object] = []
+    arguments = {"symbolFilter": "TCS", "limit": 50}
+
+    class Result:
+        pass
+
+    class Client:
+        def __init__(self, role: str) -> None:
+            self.role = role
+
+        async def __aenter__(self):
+            events.append((self.role, "enter"))
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            events.append((self.role, "exit"))
+            return False
+
+        async def list_tools(self, *, cache_mode: str = "use"):
+            events.append((self.role, "list_tools"))
+            return SimpleNamespace(tools=[])
+
+        async def call_tool(self, name: str, received: dict[str, object]):
+            events.append((self.role, "call_tool", name, received))
+            return Result()
+
+    clients = iter([Client("metadata"), Client("execution")])
+    monkeypatch.setattr("services.mcp_client.create_mcp_client", lambda endpoint: next(clients))
+
+    result = asyncio.run(execute_mcp_call("https://mcp.nseindia.in/cmmkt/mcp", "cm_get_equity_stocks", arguments))
+
+    assert isinstance(result, Result)
+    assert events == [
+        ("metadata", "enter"),
+        ("metadata", "list_tools"),
+        ("metadata", "exit"),
+        ("execution", "enter"),
+        ("execution", "list_tools"),
+        ("execution", "call_tool", "cm_get_equity_stocks", arguments),
+        ("execution", "exit"),
+    ]
+
+
+def test_mcp_call_reconnects_when_metadata_session_is_terminated(monkeypatch) -> None:
+    events: list[object] = []
+
+    class MCPError(Exception):
+        pass
+
+    class Result:
+        pass
+
+    class Client:
+        def __init__(self, role: str, *, fail: bool = False) -> None:
+            self.role = role
+            self.fail = fail
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def list_tools(self, *, cache_mode: str = "use"):
+            events.append((self.role, "list_tools"))
+            if self.fail:
+                raise ExceptionGroup("transport", [MCPError("Session terminated")])
+            return SimpleNamespace(tools=[])
+
+        async def call_tool(self, name: str, arguments: dict[str, object]):
+            events.append((self.role, "call_tool"))
+            return Result()
+
+    clients = iter([
+        Client("metadata-1", fail=True),
+        Client("metadata-2"),
+        Client("execution"),
+    ])
+
+    async def no_delay(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("services.mcp_client.create_mcp_client", lambda endpoint: next(clients))
+    monkeypatch.setattr("services.mcp_client.asyncio.sleep", no_delay)
+
+    result = asyncio.run(execute_mcp_call("https://mcp.nseindia.in/cmmkt/mcp", "cm_get_equity_stocks", {}))
+
+    assert isinstance(result, Result)
+    assert events == [
+        ("metadata-1", "list_tools"),
+        ("metadata-2", "list_tools"),
+        ("execution", "list_tools"),
+        ("execution", "call_tool"),
+    ]
+
+
 def test_mcp_discovery_serializes_tool_schema_by_alias(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -1021,20 +1329,11 @@ def test_mcp_discovery_serializes_tool_schema_by_alias(monkeypatch) -> None:
                 "outputSchema": {"type": "object"},
             }
 
-    class FakeClient:
-        def __init__(self, endpoint: str) -> None:
-            assert endpoint == "https://microsoft.example.test/mcp"
+    async def fake_list_tools(endpoint: str, *, refresh: bool) -> SimpleNamespace:
+        captured.update({"endpoint": endpoint, "refresh": refresh})
+        return SimpleNamespace(tools=[FakeTool()])
 
-        async def __aenter__(self) -> "FakeClient":
-            return self
-
-        async def __aexit__(self, *args: object) -> None:
-            return None
-
-        async def list_tools(self) -> SimpleNamespace:
-            return SimpleNamespace(tools=[FakeTool()])
-
-    monkeypatch.setattr("services.tool_library.create_mcp_client", FakeClient)
+    monkeypatch.setattr("services.tool_library.list_mcp_tools", fake_list_tools)
     monkeypatch.setattr("services.tool_library._get_source", lambda source_id: {"source_id": source_id, "endpoint": "https://microsoft.example.test/mcp"})
     monkeypatch.setattr("services.tool_library._save_discovery", lambda source_id, tools, error, **kwargs: captured.update({"tools": tools, "error": error}))
 
@@ -1042,6 +1341,8 @@ def test_mcp_discovery_serializes_tool_schema_by_alias(monkeypatch) -> None:
 
     assert result["status"] == "available"
     assert captured["error"] is None
+    assert captured["endpoint"] == "https://microsoft.example.test/mcp"
+    assert captured["refresh"] is True
     assert captured["tools"][0]["inputSchema"]["required"] == ["query"]
 
 
@@ -1097,28 +1398,18 @@ def test_agent_accepts_non_executable_mcp_tool_snapshot(monkeypatch) -> None:
 
 
 def test_available_mcp_tool_executes_with_defaults(monkeypatch) -> None:
-    calls: list[tuple[str, dict[str, object]]] = []
+    calls: list[tuple[str, str, dict[str, object]]] = []
 
     class FakeResult:
         def model_dump(self, *, mode: str) -> dict[str, object]:
             assert mode == "json"
             return {"content": [{"type": "text", "text": "sunny"}], "isError": False}
 
-    class FakeClient:
-        def __init__(self, endpoint: str) -> None:
-            assert endpoint == "https://mcp.example.test/tools"
+    async def fake_call(endpoint: str, name: str, arguments: dict[str, object]) -> FakeResult:
+        calls.append((endpoint, name, arguments))
+        return FakeResult()
 
-        async def __aenter__(self) -> "FakeClient":
-            return self
-
-        async def __aexit__(self, *args: object) -> None:
-            return None
-
-        async def call_tool(self, name: str, arguments: dict[str, object]) -> FakeResult:
-            calls.append((name, arguments))
-            return FakeResult()
-
-    monkeypatch.setattr("services.tool_runtime.create_mcp_client", FakeClient)
+    monkeypatch.setattr("services.tool_runtime.call_mcp_tool", fake_call)
     tool = build_langchain_tools([{
         "name": "weather", "external_name": "get_weather", "description": "Get weather.",
         "connection_type": "mcp", "enabled": True, "approval_policy": "automatic",
@@ -1130,20 +1421,25 @@ def test_available_mcp_tool_executes_with_defaults(monkeypatch) -> None:
     result = asyncio.run(tool.ainvoke({"city": "London"}))
 
     assert tool.name == "get_weather"
-    assert calls == [("get_weather", {"units": "metric", "city": "London"})]
+    assert calls == [(
+        "https://mcp.example.test/tools",
+        "get_weather",
+        {"units": "metric", "city": "London"},
+    )]
     assert result["isError"] is False
 
 
 def test_shared_mcp_client_disables_delete_termination(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, object] = {"caches": []}
 
     def fake_transport(endpoint: str, *, terminate_on_close: bool) -> object:
         captured.update({"endpoint": endpoint, "terminate_on_close": terminate_on_close})
         return object()
 
     class FakeClient:
-        def __init__(self, transport: object) -> None:
+        def __init__(self, transport: object, *, cache: object) -> None:
             captured["transport"] = transport
+            captured["caches"].append(cache)
 
     monkeypatch.setattr("mcp.Client", FakeClient)
     monkeypatch.setattr("mcp.client.streamable_http.streamable_http_client", fake_transport)
@@ -1151,9 +1447,16 @@ def test_shared_mcp_client_disables_delete_termination(monkeypatch) -> None:
     from services.mcp_client import create_mcp_client
 
     create_mcp_client("https://learn.microsoft.com/api/mcp")
+    create_mcp_client("https://learn.microsoft.com/api/mcp")
 
     assert captured["endpoint"] == "https://learn.microsoft.com/api/mcp"
     assert captured["terminate_on_close"] is False
+    first_cache, second_cache = captured["caches"]
+    assert first_cache.store is second_cache.store
+    assert first_cache.store._max_entries == 256
+    assert first_cache.partition == "anonymous"
+    assert first_cache.target_id == "https://learn.microsoft.com/api/mcp"
+    assert first_cache.default_ttl_ms == 300_000
 
 
 def test_post_only_mcp_filter_hides_only_known_compatibility_noise() -> None:

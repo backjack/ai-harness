@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { matchPath, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { createAgent, createCustomTool, deleteAgent, deleteLibraryTool, deleteToolSource, getAgents, getAnalytics, getConversation, getConversations, getTools, getToolSources, registerMcpSource, streamChat, testLibraryTool, testToolSource, updateAgent } from "./api";
+import { createAgent, createCustomTool, deleteAgent, deleteLibraryTool, deleteToolSource, getAgents, getAnalytics, getConversation, getConversations, getTools, getToolsForSource, getToolSources, registerMcpSource, streamChat, testLibraryTool, testToolSource, updateAgent, updateMcpSource } from "./api";
 import type { Agent, AgentCreate, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, ToolDefinition, ToolEffect, ToolSource, ToolTestResult, UserProfile } from "./types";
 
 const USER_PROFILE: UserProfile = { name: "Neeraj Sharma", emailId: "neerajs28288@gmail.com" };
@@ -14,6 +14,39 @@ const USER_PROFILE: UserProfile = { name: "Neeraj Sharma", emailId: "neerajs2828
 function isChartContent(value: unknown): value is ChartContent {
   return Boolean(value && typeof value === "object" && (value as ChartContent).library === "highcharts"
     && typeof (value as ChartContent).options === "object" && (value as ChartContent).options);
+}
+
+type JsonSchema = Record<string, unknown>;
+
+function schemaRecord(value: unknown): JsonSchema {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonSchema : {};
+}
+
+function schemaType(schema: JsonSchema): string {
+  if (typeof schema.type === "string") return schema.type;
+  if (Array.isArray(schema.type)) return schema.type.filter((value): value is string => typeof value === "string").join(" | ");
+  if (schema.properties) return "object";
+  return "any";
+}
+
+function schemaExample(schemaValue: unknown): unknown {
+  const schema = schemaRecord(schemaValue);
+  if (schema.example !== undefined) return schema.example;
+  if (Array.isArray(schema.examples) && schema.examples.length) return schema.examples[0];
+  if (schema.default !== undefined) return schema.default;
+  if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0];
+  const type = schemaType(schema).split(" | ")[0];
+  if (type === "object") return Object.fromEntries(Object.entries(schemaRecord(schema.properties)).map(([name, child]) => [name, schemaExample(child)]));
+  if (type === "array") return [schemaExample(schema.items)];
+  if (type === "integer" || type === "number") return 0;
+  if (type === "boolean") return false;
+  return "example";
+}
+
+function toolInputFields(schemaValue: unknown): Array<{ name: string; schema: JsonSchema; required: boolean }> {
+  const schema = schemaRecord(schemaValue);
+  const required = new Set(Array.isArray(schema.required) ? schema.required.filter((value): value is string => typeof value === "string") : []);
+  return Object.entries(schemaRecord(schema.properties)).map(([name, fieldSchema]) => ({ name, schema: schemaRecord(fieldSchema), required: required.has(name) }));
 }
 
 function ChartView({ content }: { content: unknown }) {
@@ -29,8 +62,26 @@ function AvailabilityDot({ status }: { status: string }) {
   return <span className={`availability-dot ${available ? "available" : "error"}`} role="img" aria-label={label} title={label} />;
 }
 
+type MarketplaceActionIconName = "connect" | "create" | "refresh" | "edit" | "trash" | "save" | "user-plus" | "play" | "json" | "close";
+
+function MarketplaceActionIcon({ name }: { name: MarketplaceActionIconName }) {
+  const paths = {
+    connect: <><path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7ZM12 16v5M18 17h4M20 15v4" /></>,
+    create: <><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13 5l-2 14" /><path d="M19 3v4M17 5h4" /></>,
+    refresh: <><path d="M20 7v5h-5M4 17v-5h5" /><path d="M18.5 9A7 7 0 0 0 6 6.5L4 9M5.5 15A7 7 0 0 0 18 17.5l2-2.5" /></>,
+    edit: <><path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></>,
+    trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" /></>,
+    save: <><path d="M5 3h12l2 2v16H5V3Z" /><path d="M8 3v6h8V3M8 21v-7h8v7" /></>,
+    "user-plus": <><circle cx="9" cy="8" r="4" /><path d="M3 21v-2a6 6 0 0 1 12 0v2M19 8v6M16 11h6" /></>,
+    play: <path d="m8 5 11 7-11 7V5Z" />,
+    json: <><path d="M6 3h9l3 3v15H6V3Z" /><path d="M15 3v4h4M10 10c-1 0-1 .8-1 2s0 2-1 2c1 0 1 .8 1 2s0 2 1 2M14 10c1 0 1 .8 1 2s0 2 1 2c-1 0-1 .8-1 2s0 2-1 2" /></>,
+    close: <path d="M6 6l12 12M18 6 6 18" />,
+  };
+  return <svg className="marketplace-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
+}
+
 function ToastBar({ toast, onClose }: { toast: { type: "success" | "error"; message: string }; onClose: () => void }) {
-  return <div className={`toast-bar ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}><span>{toast.message}</span><button type="button" onClick={onClose} aria-label="Close notification">×</button></div>;
+  return <div className={`toast-bar ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}><span>{toast.message}</span><button type="button" onClick={onClose} aria-label="Close notification" title="Close notification"><MarketplaceActionIcon name="close" /></button></div>;
 }
 
 function MessageContent({ message }: { message: ChatMessage }) {
@@ -241,18 +292,20 @@ function Marketplace() {
 }
 
 function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpdated: (agent: Agent) => void }) {
-  const [tab, setTab] = useState<"apps" | "connections" | "tools" | "playground">("connections");
+  const [tab, setTab] = useState<"apps" | "connections" | "tools">("connections");
   const [sources, setSources] = useState<ToolSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [mcpSearch, setMcpSearch] = useState("");
   const [tools, setTools] = useState<ToolDefinition[]>([]);
   const [search, setSearch] = useState("");
   const [connection, setConnection] = useState("");
-  const [effect, setEffect] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
   const [dialog, setDialog] = useState<"mcp" | "custom" | null>(null);
+  const [editingSource, setEditingSource] = useState<ToolSource | null>(null);
+  const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
   const [selected, setSelected] = useState<ToolDefinition | null>(null);
+  const [toolModalTab, setToolModalTab] = useState<"info" | "test">("info");
   const [testInput, setTestInput] = useState("{}");
+  const [testInputError, setTestInputError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<ToolTestResult | null>(null);
   const [targetAgentId, setTargetAgentId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -270,6 +323,26 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
   function apiError(reason: unknown, fallback: string) {
     showToast("error", reason instanceof Error ? reason.message : fallback);
   }
+  function closeMcpEdit() {
+    if (busy) return;
+    setEditingSource(null);
+    setMcpForm({ name: "", description: "", endpoint: "" });
+  }
+  function openTool(tool: ToolDefinition) {
+    setSelected(tool);
+    setToolModalTab("info");
+    setTestInput("{}");
+    setTestInputError(null);
+    setTestResult(null);
+  }
+  function closeTool() {
+    if (busy) return;
+    setSelected(null);
+    setToolModalTab("info");
+    setTestInput("{}");
+    setTestInputError(null);
+    setTestResult(null);
+  }
   const load = async (announce = false) => {
     setLoading(true);
     try { const [nextSources, nextTools] = await Promise.all([getToolSources(), getTools()]); setSources(nextSources); setTools(nextTools); if (announce) showToast("success", "Marketplace loaded successfully."); }
@@ -281,13 +354,31 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
   const visibleTools = tools.filter((tool) => {
     const query = search.trim().toLowerCase();
     return (!query || [tool.display_name, tool.description, tool.source_name, tool.category].some((value) => value.toLowerCase().includes(query)))
-      && (!connection || tool.connection_type === connection) && (!effect || tool.effect === effect) && (!statusFilter || tool.status === statusFilter);
+      && (!connection || tool.connection_type === connection);
   });
 
   async function submitMcp(event: FormEvent) {
     event.preventDefault(); setBusy(true);
     try { await registerMcpSource({ ...mcpForm, owner_email: USER_PROFILE.emailId }); setDialog(null); setMcpForm({ name: "", description: "", endpoint: "" }); await load(); showToast("success", "MCP server registered successfully."); }
     catch (reason) { apiError(reason, "Could not register MCP server"); }
+    finally { setBusy(false); }
+  }
+  async function submitMcpEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!editingSource) return;
+    setBusy(true);
+    try {
+      const updated = await updateMcpSource(editingSource.source_id, mcpForm);
+      const sourceTools = await getToolsForSource(editingSource.source_id);
+      setSources((items) => items.map((item) => item.source_id === editingSource.source_id
+        ? { ...item, ...updated, tool_count: sourceTools.length, last_error: updated.test.error }
+        : item));
+      setTools((items) => [...items.filter((item) => item.source_id !== editingSource.source_id), ...sourceTools]);
+      setEditingSource(null);
+      setMcpForm({ name: "", description: "", endpoint: "" });
+      if (updated.test.status === "available") showToast("success", "MCP server updated and refreshed successfully.");
+      else showToast("error", updated.test.error || "MCP server was updated, but the connection test failed.");
+    } catch (reason) { apiError(reason, "Could not update MCP server"); }
     finally { setBusy(false); }
   }
   async function submitCustom(event: FormEvent) {
@@ -297,7 +388,18 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
     finally { setBusy(false); }
   }
   async function refreshSource(sourceId: string) {
-    setBusy(true); try { await testToolSource(sourceId); await load(); showToast("success", "MCP server connection refreshed successfully."); } catch (reason) { apiError(reason, "Connection test failed"); } finally { setBusy(false); }
+    setRefreshingSourceId(sourceId);
+    try {
+      const test = await testToolSource(sourceId);
+      const sourceTools = await getToolsForSource(sourceId);
+      setSources((items) => items.map((item) => item.source_id === sourceId
+        ? { ...item, status: test.status, tool_count: sourceTools.length, last_error: test.error }
+        : item));
+      setTools((items) => [...items.filter((item) => item.source_id !== sourceId), ...sourceTools]);
+      if (test.status === "available") showToast("success", "MCP server connection refreshed successfully.");
+      else showToast("error", test.error || "MCP server connection test failed.");
+    } catch (reason) { apiError(reason, "Connection test failed"); }
+    finally { setRefreshingSourceId(null); }
   }
   async function removeSource(source: ToolSource) {
     if (!window.confirm(`Delete MCP server "${source.name}" and deactivate all of its tools?`)) return;
@@ -314,8 +416,25 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
     finally { setBusy(false); }
   }
   async function runTest(event: FormEvent) {
-    event.preventDefault(); if (!selected) return; setBusy(true); setTestResult(null);
-    try { const args = JSON.parse(testInput) as Record<string, unknown>; setTestResult(await testLibraryTool(selected.tool_definition_id, args, USER_PROFILE.emailId)); showToast("success", "Tool test completed successfully."); }
+    event.preventDefault();
+    if (!selected) return;
+    let args: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(testInput) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Arguments must be a JSON object");
+      args = parsed as Record<string, unknown>;
+      setTestInputError(null);
+    } catch (reason) {
+      setTestInputError(reason instanceof Error ? reason.message : "Enter valid JSON arguments.");
+      return;
+    }
+    setBusy(true); setTestResult(null);
+    try {
+      const result = await testLibraryTool(selected.tool_definition_id, args, USER_PROFILE.emailId);
+      setTestResult(result);
+      if (result.outcome === "success") showToast("success", "Tool test completed successfully.");
+      else showToast("error", result.error || "Tool test failed.");
+    }
     catch (reason) { apiError(reason, "Tool test failed"); }
     finally { setBusy(false); }
   }
@@ -335,14 +454,21 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
     finally { setBusy(false); }
   }
 
-  return <section className="content-page marketplace-page"><header className="content-page-header"><div><p className="eyebrow">TOOL LIBRARY</p><h1>Marketplace</h1><p>Register sources, discover tools, and test them before adding snapshots to agents.</p></div><div className="agent-header-actions">{tab === "connections" && <><label className="catalog-search mcp-search"><span className="sr-only">Search MCP servers</span><input type="search" value={mcpSearch} onChange={(event) => setMcpSearch(event.target.value)} placeholder="Search MCP servers" /></label><button className="primary-button" onClick={() => setDialog("mcp")}>Register MCP Server</button></>}{tab === "tools" && <button className="primary-button" onClick={() => setDialog("custom")}>Create Python Tool</button>}</div></header>
-    <div className="marketplace-toolbar"><div className="marketplace-tabs" role="tablist">{([ ["apps","Apps"],["connections","MCP Servers"],["tools","Tool Library"],["playground","Test Playground"] ] as const).map(([id,label]) => <button type="button" role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}</div>{(tab === "tools" || tab === "playground") && <label className="catalog-search marketplace-search"><span className="sr-only">Search tools</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by business task" /></label>}</div>
-    {tab === "apps" && <div className="marketplace-grid">{MARKETPLACE_APPS.map((app) => <article className="marketplace-card app-card" key={app.name}><div className="marketplace-icon">{app.icon}</div><div><span className="marketplace-category">{app.category}</span><h2>{app.name}</h2><p>{app.description}</p></div></article>)}</div>}
-    {tab === "connections" && (() => { const query = mcpSearch.trim().toLowerCase(); const allMcpSources = sources.filter((source) => source.source_type === "mcp"); const mcpSources = allMcpSources.filter((source) => !query || [source.name, source.description ?? "", source.endpoint ?? ""].some((value) => value.toLowerCase().includes(query))); const selectedSource = allMcpSources.find((source) => source.source_id === selectedSourceId); const selectedSourceTools = selectedSource ? tools.filter((tool) => tool.source_id === selectedSource.source_id) : []; return <div className="mcp-server-layout"><section className="mcp-server-panel"><header><div><span className="marketplace-category">REGISTERED SOURCES</span><h2>MCP Servers</h2></div><span>{mcpSources.length}</span></header>{loading ? <div className="mcp-loading" role="status"><i className="loading-circle" /><span>Loading MCP servers</span></div> : <div className="mcp-server-grid">{mcpSources.map((source) => <article role="button" tabIndex={0} aria-pressed={selectedSourceId === source.source_id} className={`marketplace-card catalog-card connection-card ${selectedSourceId === source.source_id ? "selected" : ""}`} onClick={() => setSelectedSourceId(source.source_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedSourceId(source.source_id); } }} key={source.source_id}><div className="marketplace-icon">MCP</div><div className="marketplace-card-content"><AvailabilityDot status={source.status} /><h2>{source.name}</h2><p>{source.description || "No description provided."}</p><code>{source.endpoint}</code><p>{source.tool_count} discovered tools</p><div className="card-actions"><button className="secondary-button" disabled={busy} onClick={(event) => { event.stopPropagation(); void refreshSource(source.source_id); }}>{busy ? <i className="loading-circle small" aria-hidden="true" /> : null}Test & refresh</button><button className="danger-button" disabled={busy} onClick={(event) => { event.stopPropagation(); void removeSource(source); }}>Delete</button></div></div></article>)}{mcpSources.length === 0 && <p className="mcp-not-found">No MCP Server found</p>}</div>}</section><aside className="mcp-tools-panel" aria-live="polite">{selectedSource ? <><header><div><span className="marketplace-category">MCP TOOLS</span><h2>{selectedSource.name}</h2></div><span>{selectedSourceTools.length}</span></header>{selectedSourceTools.length ? <ul>{selectedSourceTools.map((tool) => <li key={tool.tool_definition_id}><span>{tool.display_name}</span><AvailabilityDot status={tool.status} /></li>)}</ul> : <p className="mcp-tools-empty">No tools discovered for this server.</p>}</> : <><header><div><span className="marketplace-category">DISCOVERED TOOLS</span><h2>MCP Tools</h2></div></header><p className="mcp-tools-empty">Select an MCP server to view its tools.</p></>}</aside></div>; })()}
-    {tab === "tools" && <><div className="tool-filters"><select value={connection} onChange={(event) => setConnection(event.target.value)}><option value="">All connections</option><option value="mcp">MCP</option><option value="custom_langchain">Custom · LangChain</option></select><select value={effect} onChange={(event) => setEffect(event.target.value)}><option value="">All effects</option>{["read","calculate","write","delete","unknown"].map((value) => <option key={value}>{value}</option>)}</select><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="available">Available</option><option value="unavailable">Unavailable</option></select></div><div className="marketplace-grid tool-library-grid">{visibleTools.map((tool) => { const sourceLabel = tool.connection_type === "mcp" ? tool.source_name : "Custom · LangChain"; return <button type="button" className="marketplace-card catalog-card tool-card-button" onClick={() => setSelected(tool)} key={tool.tool_definition_id}><div className="marketplace-icon">{tool.connection_type === "mcp" ? "MCP" : "PY"}</div><div className="marketplace-card-content"><span className="marketplace-category">{tool.connection_type === "mcp" ? "MCP" : "Custom · LangChain"} · {tool.category}</span><h2 className="tool-card-title" title={tool.display_name}>{tool.display_name}</h2><p className="tool-card-description" title={tool.description}>{tool.description}</p><div className="tool-card-footer"><span className="tool-source-tag" title={sourceLabel}>{sourceLabel}</span><div className="tool-badges"><span>{tool.effect}</span><AvailabilityDot status={tool.status} /></div></div></div></button>; })}{visibleTools.length === 0 && <p className="catalog-empty">No tools match these filters.</p>}</div></>}
-    {tab === "playground" && <div className="playground-layout"><aside className="playground-tools">{visibleTools.map((tool) => <button className={selected?.tool_definition_id === tool.tool_definition_id ? "active" : ""} onClick={() => { setSelected(tool); setTestResult(null); }} key={tool.tool_definition_id}>{tool.display_name}<small>{tool.connection_type}</small></button>)}</aside><form className="playground-panel" onSubmit={runTest}>{selected ? <><h2>{selected.display_name}</h2><p>{selected.description}</p><details><summary>Developer details</summary><pre>{JSON.stringify(selected.input_schema, null, 2)}</pre></details><label>Arguments JSON<textarea rows={10} value={testInput} onChange={(event) => setTestInput(event.target.value)} /></label><button className="primary-button" disabled={busy}>Test tool</button>{testResult && <div className={`test-result ${testResult.outcome}`}><strong>{testResult.outcome} · {testResult.duration_ms}ms</strong><pre>{JSON.stringify(testResult.output ?? testResult.error, null, 2)}</pre></div>}</> : <p>Select a tool to test.</p>}</form></div>}
-    {selected && tab === "tools" && <div className="marketplace-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}><section className="marketplace-dialog"><div className="agent-modal-header"><div><p className="eyebrow">{selected.connection_type === "mcp" ? "MCP" : "CUSTOM · LANGCHAIN"}</p><h1>{selected.display_name}</h1></div><button className="modal-close" onClick={() => setSelected(null)}>×</button></div><p>{selected.description}</p><dl className="tool-detail-list"><dt>Source</dt><dd>{selected.source_name}</dd><dt>Owner</dt><dd>{selected.owner_email}</dd><dt>Category</dt><dd>{selected.category}</dd><dt>Effect</dt><dd>{selected.effect} ({selected.effect_source})</dd></dl><details><summary>Developer details</summary><pre>{JSON.stringify(selected.input_schema, null, 2)}</pre></details><label className="tool-agent-select">Add to agent<select value={targetAgentId} onChange={(event) => setTargetAgentId(event.target.value)}><option value="">Select an agent</option>{agents.map((agent) => <option value={agent.agent_id} key={agent.agent_id}>{agent.agent_name}</option>)}</select></label><div className="marketplace-form-actions"><button className="danger-button" disabled={busy} onClick={() => void removeTool(selected)}>Delete</button><button className="secondary-button" onClick={() => { setTab("playground"); setTestResult(null); }}>Test tool</button><button className="primary-button" disabled={!targetAgentId || busy} onClick={() => void addToAgent()}>Add to agent</button></div></section></div>}
-    {dialog && <div className="marketplace-dialog-backdrop"><section className="marketplace-dialog"><div className="agent-modal-header"><h1>{dialog === "mcp" ? "Register MCP Server" : "Create Python Tool"}</h1><button className="modal-close" onClick={() => setDialog(null)}>×</button></div>{dialog === "mcp" ? <form className="marketplace-form" onSubmit={submitMcp}><label>Name<input required value={mcpForm.name} onChange={(e) => setMcpForm({...mcpForm,name:e.target.value})} /></label><label>Description<textarea value={mcpForm.description} onChange={(e) => setMcpForm({...mcpForm,description:e.target.value})} /></label><label>Streamable HTTP endpoint<input type="url" required value={mcpForm.endpoint} onChange={(e) => setMcpForm({...mcpForm,endpoint:e.target.value})} /></label><button className="primary-button loading-button" disabled={busy}>{busy ? <i className="loading-circle small" aria-hidden="true" /> : null}Register & discover</button></form> : <form className="marketplace-form" onSubmit={submitCustom}><label>Function name<input required value={customForm.name} onChange={(e) => setCustomForm({...customForm,name:e.target.value})} /></label><label>Display name<input value={customForm.display_name} onChange={(e) => setCustomForm({...customForm,display_name:e.target.value})} /></label><label>Description<textarea required value={customForm.description} onChange={(e) => setCustomForm({...customForm,description:e.target.value})} /></label><label>Category<input value={customForm.category} onChange={(e) => setCustomForm({...customForm,category:e.target.value})} /></label><label>Effect<select value={customForm.effect} onChange={(e) => setCustomForm({...customForm,effect:e.target.value as ToolEffect})}>{["read","calculate","write","delete","unknown"].map((value) => <option key={value}>{value}</option>)}</select></label><PythonEditor value={customForm.source_code} onChange={(source_code) => setCustomForm({...customForm,source_code})} /><button className="primary-button" disabled={busy}>Save custom tool</button></form>}</section></div>}
+  const selectedInputFields = toolInputFields(selected?.input_schema);
+  const selectedExampleInput = Object.fromEntries(selectedInputFields.map((field) => [field.name, schemaExample(field.schema)]));
+
+  return <section className="content-page marketplace-page"><header className="content-page-header"><div><p className="eyebrow">TOOL LIBRARY</p><h1>Marketplace</h1><p>Register sources, discover tools, and test them before adding snapshots to agents.</p></div><div className="agent-header-actions">{tab === "connections" && <><label className="catalog-search mcp-search"><span className="sr-only">Search MCP servers</span><input type="search" value={mcpSearch} onChange={(event) => setMcpSearch(event.target.value)} placeholder="Search MCP servers" /></label><button type="button" className="marketplace-icon-button primary-icon header-icon-action" onClick={() => setDialog("mcp")} aria-label="Register MCP server" title="Register MCP server"><MarketplaceActionIcon name="connect" /></button></>}{tab === "tools" && <button type="button" className="marketplace-icon-button primary-icon header-icon-action" onClick={() => setDialog("custom")} aria-label="Create Python tool" title="Create Python tool"><MarketplaceActionIcon name="create" /></button>}</div></header>
+    <div className={`marketplace-toolbar ${tab === "connections" ? "mcp-toolbar" : ""}`}><div className="marketplace-tabs" role="tablist">{([ ["apps","Apps"],["connections","MCP Servers"],["tools","Tool Library"] ] as const).map(([id,label]) => <button type="button" role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}</div>{tab === "tools" && <div className="tool-library-toolbar-controls"><label className="catalog-search marketplace-search"><span className="sr-only">Search tools</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by business task" /></label><label className="sr-only" htmlFor="tool-connection-filter">Filter by connection</label><select id="tool-connection-filter" value={connection} onChange={(event) => setConnection(event.target.value)}><option value="">All connections</option><option value="mcp">MCP</option><option value="custom_langchain">Custom · LangChain</option></select></div>}</div>
+    <div className={`marketplace-tab-surface marketplace-${tab}-surface`}>
+    <div className="marketplace-tab-scroll">
+    {tab === "apps" && <div className="marketplace-grid app-library-grid">{MARKETPLACE_APPS.map((app) => <article className="marketplace-card app-card" key={app.name}><div className="marketplace-icon">{app.icon}</div><div className="marketplace-card-content"><h2>{app.name}</h2><p>{app.description}</p><span className="app-category-tag">{app.category}</span></div></article>)}</div>}
+    {tab === "connections" && (() => { const query = mcpSearch.trim().toLowerCase(); const allMcpSources = sources.filter((source) => source.source_type === "mcp"); const mcpSources = allMcpSources.filter((source) => !query || [source.name, source.description ?? "", source.endpoint ?? ""].some((value) => value.toLowerCase().includes(query))); const selectedSource = allMcpSources.find((source) => source.source_id === selectedSourceId); const selectedSourceTools = selectedSource ? tools.filter((tool) => tool.source_id === selectedSource.source_id) : []; return <div className="mcp-server-layout"><section className="mcp-server-panel"><header><div><span className="marketplace-category">REGISTERED SOURCES</span><h2>MCP Servers</h2></div><span>{mcpSources.length}</span></header>{loading ? <div className="mcp-loading" role="status"><i className="loading-circle" /><span>Loading MCP servers</span></div> : <div className="mcp-server-grid">{mcpSources.map((source) => <article role="button" tabIndex={0} aria-pressed={selectedSourceId === source.source_id} className={`marketplace-card catalog-card connection-card ${selectedSourceId === source.source_id ? "selected" : ""}`} onClick={() => setSelectedSourceId(source.source_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedSourceId(source.source_id); } }} key={source.source_id}><div className="marketplace-icon">MCP</div><div className="marketplace-card-content"><div className="connection-card-heading"><h2>{source.name}</h2><AvailabilityDot status={source.status} /></div><p>{source.description || "No description provided."}</p><code>{source.endpoint}</code><p>{source.tool_count} discovered tools</p><div className="card-actions"><button type="button" className="marketplace-icon-button secondary-icon" disabled={refreshingSourceId !== null} onClick={(event) => { event.stopPropagation(); void refreshSource(source.source_id); }} aria-label={`Test and refresh ${source.name}`} title="Test & refresh">{refreshingSourceId === source.source_id ? <i className="loading-circle small" aria-hidden="true" /> : <MarketplaceActionIcon name="refresh" />}</button><button type="button" className="marketplace-icon-button secondary-icon" disabled={busy} onClick={(event) => { event.stopPropagation(); setEditingSource(source); setMcpForm({ name: source.name, description: source.description ?? "", endpoint: source.endpoint ?? "" }); }} aria-label={`Edit ${source.name}`} title="Edit"><MarketplaceActionIcon name="edit" /></button><button type="button" className="marketplace-icon-button danger-icon" disabled={busy} onClick={(event) => { event.stopPropagation(); void removeSource(source); }} aria-label={`Delete ${source.name}`} title="Delete"><MarketplaceActionIcon name="trash" /></button></div></div></article>)}{mcpSources.length === 0 && <p className="mcp-not-found">No MCP Server found</p>}</div>}</section><aside className="mcp-tools-panel" aria-live="polite">{selectedSource ? <><header><div><span className="marketplace-category">MCP TOOLS</span><h2>{selectedSource.name}</h2></div><span>{selectedSourceTools.length}</span></header>{selectedSourceTools.length ? <ul>{selectedSourceTools.map((tool) => <li key={tool.tool_definition_id}><span>{tool.display_name}</span><AvailabilityDot status={tool.status} /></li>)}</ul> : <p className="mcp-tools-empty">No tools discovered for this server.</p>}</> : <><header><div><span className="marketplace-category">DISCOVERED TOOLS</span><h2>MCP Tools</h2></div></header><p className="mcp-tools-empty">Select an MCP server to view its tools.</p></>}</aside></div>; })()}
+    {tab === "tools" && <div className="marketplace-grid tool-library-grid">{visibleTools.map((tool) => { const sourceLabel = tool.connection_type === "mcp" ? tool.source_name : "Custom · LangChain"; return <button type="button" className="marketplace-card catalog-card tool-card-button" onClick={() => openTool(tool)} key={tool.tool_definition_id}><div className="marketplace-icon">{tool.connection_type === "mcp" ? "MCP" : "PY"}</div><div className="marketplace-card-content"><h2 className="tool-card-title" title={tool.display_name}>{tool.display_name}</h2><p className="tool-card-description" title={tool.description}>{tool.description}</p><div className="tool-card-footer"><span className="tool-source-tag" title={sourceLabel}>{sourceLabel}</span><div className="tool-badges"><span>{tool.effect}</span><AvailabilityDot status={tool.status} /></div></div></div></button>; })}{visibleTools.length === 0 && <p className="catalog-empty">No tools match these filters.</p>}</div>}
+    </div>
+    </div>
+    {selected && tab === "tools" && <div className="marketplace-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeTool(); }}><section className="marketplace-dialog tool-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="tool-detail-title"><div className="agent-modal-header"><h1 id="tool-detail-title">{selected.display_name}</h1><button type="button" className="marketplace-icon-button close-icon" disabled={busy} onClick={closeTool} aria-label="Close tool details" title="Close"><MarketplaceActionIcon name="close" /></button></div><div className="tool-modal-tabs" role="tablist" aria-label="Tool details"><button type="button" role="tab" aria-selected={toolModalTab === "info"} className={toolModalTab === "info" ? "active" : ""} onClick={() => setToolModalTab("info")}>Info</button><button type="button" role="tab" aria-selected={toolModalTab === "test"} className={toolModalTab === "test" ? "active" : ""} onClick={() => setToolModalTab("test")}>Test tool</button></div>{toolModalTab === "info" ? <div className="tool-modal-panel" role="tabpanel"><p>{selected.description}</p><dl className="tool-detail-list"><dt>Connection</dt><dd>{selected.connection_type === "mcp" ? "MCP" : "Custom · LangChain"}</dd><dt>Source</dt><dd>{selected.source_name}</dd><dt>Owner</dt><dd>{selected.owner_email}</dd><dt>Category</dt><dd>{selected.category}</dd><dt>Effect</dt><dd>{selected.effect} ({selected.effect_source})</dd></dl><details><summary>Developer details</summary><pre>{JSON.stringify(selected.input_schema, null, 2)}</pre></details><label className="tool-agent-select">Add to agent<select value={targetAgentId} onChange={(event) => setTargetAgentId(event.target.value)}><option value="">Select an agent</option>{agents.map((agent) => <option value={agent.agent_id} key={agent.agent_id}>{agent.agent_name}</option>)}</select></label><div className="marketplace-form-actions"><button type="button" className="marketplace-icon-button danger-icon" disabled={busy} onClick={() => void removeTool(selected)} aria-label={`Delete ${selected.display_name}`} title="Delete"><MarketplaceActionIcon name="trash" /></button><button type="button" className="marketplace-icon-button primary-icon" disabled={!targetAgentId || busy} onClick={() => void addToAgent()} aria-label={`Add ${selected.display_name} to agent`} title="Add to agent"><MarketplaceActionIcon name="user-plus" /></button></div></div> : <form className="tool-modal-panel tool-test-panel" role="tabpanel" onSubmit={runTest}><div className="tool-test-guide"><strong>How to test this tool</strong><ol><li>Review the required and optional inputs.</li><li>Load the example JSON or enter your own values.</li><li>Run the tool and inspect its response below.</li></ol></div><section className="tool-input-guide"><header><div><h2>Inputs</h2><p>{selectedInputFields.length ? `${selectedInputFields.length} declared input${selectedInputFields.length === 1 ? "" : "s"}` : "This tool has no declared inputs."}</p></div><button type="button" className="marketplace-icon-button secondary-icon" onClick={() => { setTestInput(JSON.stringify(selectedExampleInput, null, 2)); setTestInputError(null); }} aria-label="Use example JSON" title="Use example JSON"><MarketplaceActionIcon name="json" /></button></header>{selectedInputFields.length > 0 && <div className="tool-input-list">{selectedInputFields.map((field) => <article key={field.name}><div><code>{field.name}</code><span className={field.required ? "required" : "optional"}>{field.required ? "Required" : "Optional"}</span></div><strong>{schemaType(field.schema)}</strong>{typeof field.schema.description === "string" && <p>{field.schema.description}</p>}{field.schema.default !== undefined && <small>Default: {JSON.stringify(field.schema.default)}</small>}{Array.isArray(field.schema.enum) && <small>Allowed: {field.schema.enum.map((value) => String(value)).join(", ")}</small>}</article>)}</div>}</section><details className="tool-developer-options"><summary>Developer options</summary><h3>Input schema</h3><pre>{JSON.stringify(selected.input_schema, null, 2)}</pre>{selected.output_schema && <><h3>Output schema</h3><pre>{JSON.stringify(selected.output_schema, null, 2)}</pre></>}</details><label>Arguments JSON<textarea rows={10} aria-invalid={Boolean(testInputError)} value={testInput} onChange={(event) => { setTestInput(event.target.value); setTestInputError(null); }} />{testInputError && <span className="field-error" role="alert">{testInputError}</span>}</label><button className="marketplace-icon-button primary-icon" disabled={busy} aria-label="Run tool test" title="Run test">{busy ? <i className="loading-circle small" aria-hidden="true" /> : <MarketplaceActionIcon name="play" />}</button>{testResult && <div className={`test-result ${testResult.outcome}`}><strong>{testResult.outcome} · {testResult.duration_ms}ms</strong><pre>{JSON.stringify(testResult.output ?? testResult.error, null, 2)}</pre></div>}</form>}</section></div>}
+    {editingSource && <div className="marketplace-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeMcpEdit(); }}><section className="marketplace-dialog"><div className="agent-modal-header"><h1>Edit MCP Server</h1><button type="button" className="marketplace-icon-button close-icon" disabled={busy} onClick={closeMcpEdit} aria-label="Close MCP server editor" title="Close"><MarketplaceActionIcon name="close" /></button></div><form className="marketplace-form" onSubmit={submitMcpEdit}><label>Name<input required value={mcpForm.name} onChange={(event) => setMcpForm({ ...mcpForm, name: event.target.value })} /></label><label>Description<textarea value={mcpForm.description} onChange={(event) => setMcpForm({ ...mcpForm, description: event.target.value })} /></label><label>Streamable HTTP endpoint<input type="url" required value={mcpForm.endpoint} onChange={(event) => setMcpForm({ ...mcpForm, endpoint: event.target.value })} /></label><button className="marketplace-icon-button primary-icon form-icon-action" disabled={busy} aria-label="Save and refresh MCP server" title="Save & refresh">{busy ? <i className="loading-circle small" aria-hidden="true" /> : <MarketplaceActionIcon name="save" />}</button></form></section></div>}
+    {dialog && <div className="marketplace-dialog-backdrop"><section className="marketplace-dialog"><div className="agent-modal-header"><h1>{dialog === "mcp" ? "Register MCP Server" : "Create Python Tool"}</h1><button type="button" className="marketplace-icon-button close-icon" onClick={() => setDialog(null)} aria-label="Close dialog" title="Close"><MarketplaceActionIcon name="close" /></button></div>{dialog === "mcp" ? <form className="marketplace-form" onSubmit={submitMcp}><label>Name<input required value={mcpForm.name} onChange={(e) => setMcpForm({...mcpForm,name:e.target.value})} /></label><label>Description<textarea value={mcpForm.description} onChange={(e) => setMcpForm({...mcpForm,description:e.target.value})} /></label><label>Streamable HTTP endpoint<input type="url" required value={mcpForm.endpoint} onChange={(e) => setMcpForm({...mcpForm,endpoint:e.target.value})} /></label><button className="marketplace-icon-button primary-icon form-icon-action" disabled={busy} aria-label="Register and discover MCP server" title="Register & discover">{busy ? <i className="loading-circle small" aria-hidden="true" /> : <MarketplaceActionIcon name="connect" />}</button></form> : <form className="marketplace-form" onSubmit={submitCustom}><label>Function name<input required value={customForm.name} onChange={(e) => setCustomForm({...customForm,name:e.target.value})} /></label><label>Display name<input value={customForm.display_name} onChange={(e) => setCustomForm({...customForm,display_name:e.target.value})} /></label><label>Description<textarea required value={customForm.description} onChange={(e) => setCustomForm({...customForm,description:e.target.value})} /></label><label>Category<input value={customForm.category} onChange={(e) => setCustomForm({...customForm,category:e.target.value})} /></label><label>Effect<select value={customForm.effect} onChange={(e) => setCustomForm({...customForm,effect:e.target.value as ToolEffect})}>{["read","calculate","write","delete","unknown"].map((value) => <option key={value}>{value}</option>)}</select></label><PythonEditor value={customForm.source_code} onChange={(source_code) => setCustomForm({...customForm,source_code})} /><button className="marketplace-icon-button primary-icon form-icon-action" disabled={busy} aria-label="Save custom tool" title="Save custom tool"><MarketplaceActionIcon name="save" /></button></form>}</section></div>}
     {toast && <ToastBar toast={toast} onClose={() => { window.clearTimeout(toastTimerRef.current); setToast(null); }} />}
   </section>;
 }
@@ -403,7 +529,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   const [tools, setTools] = useState<AgentTool[]>([]);
   const [libraryTools, setLibraryTools] = useState<ToolDefinition[]>([]);
   const [selectedToolIndex, setSelectedToolIndex] = useState<number | null>(null);
-  const [topics, setTopics] = useState("");
+  const [policyText, setPolicyText] = useState("");
   const [fallback, setFallback] = useState("");
   const [selectedGuardrail, setSelectedGuardrail] = useState<"topics" | "fallback">("topics");
   const [error, setError] = useState("");
@@ -430,16 +556,17 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
 
   function resetForm() {
     setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setUserPrompt(""); setInitiativeId("");
-    setTools([]); setSelectedToolIndex(null); setTopics(""); setFallback(""); setSelectedGuardrail("topics"); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
+    setTools([]); setSelectedToolIndex(null); setPolicyText(""); setFallback(""); setSelectedGuardrail("topics"); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
   }
 
   function openCreate() { resetForm(); setCreating(true); }
   function openEdit(agent: Agent) {
     const guardrails = agent.guardrails ?? {};
     const allowedTopics = Array.isArray(guardrails.allowed_topics) ? guardrails.allowed_topics.filter((topic): topic is string => typeof topic === "string") : [];
+    const legacyPolicy = allowedTopics.length ? `Only allow requests related to these topics: ${allowedTopics.join(", ")}.` : "";
     setEditingAgent(agent); setName(agent.agent_name); setDescription(agent.description); setModelId(agent.model_id);
     setSystemPrompt(agent.system_prompts[0] ?? ""); setUserPrompt(agent.user_prompts?.[0] ?? ""); setInitiativeId(agent.initiative_id ?? ""); setTools(agent.tooling.map((tool) => ({ ...tool }))); setSelectedToolIndex(agent.tooling.length ? 0 : null);
-    setTopics(allowedTopics.join(", ")); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
+    setPolicyText(typeof guardrails.policy_text === "string" ? guardrails.policy_text : legacyPolicy); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
     setStep(1); setError(""); setCreating(true);
   }
 
@@ -516,8 +643,8 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
     if (toolsError) { setStep(3); setError(toolsError); return; }
     setSaving(true); setError("");
     const guardrails: Record<string, unknown> = editingAgent ? { ...editingAgent.guardrails } : {};
-    const allowedTopics = topics.split(",").map((topic) => topic.trim()).filter(Boolean);
-    if (allowedTopics.length) guardrails.allowed_topics = allowedTopics; else delete guardrails.allowed_topics;
+    delete guardrails.allowed_topics;
+    if (policyText.trim()) guardrails.policy_text = policyText.trim(); else delete guardrails.policy_text;
     if (fallback.trim()) guardrails.out_of_scope_response = fallback.trim(); else delete guardrails.out_of_scope_response;
     const updatePayload: AgentUpdate = {
       agent_name: name.trim(), description: description.trim(), initiative_id: initiativeId.trim() || null, model_id: selectedModel.id,
@@ -554,9 +681,9 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
     {step === 2 && <div className="wizard-fields compact-step"><MarkdownPromptEditor label="System prompt" value={systemPrompt} onChange={setSystemPrompt} placeholder="Write system instructions using Markdown" /><MarkdownPromptEditor label="User prompt" value={userPrompt} onChange={setUserPrompt} placeholder="Write a reusable user prompt using Markdown" /></div>}
     {step === 3 && <section className="agent-library-picker"><div><h2>Tool Library</h2><p>Select individual tools. A snapshot is copied into this agent.</p></div><div>{libraryTools.filter((tool) => tool.status === "available").map((tool) => <button type="button" disabled={tools.some((item) => item.tool_definition_id === tool.tool_definition_id)} onClick={() => addLibraryTool(tool)} key={tool.tool_definition_id}><span>{tool.display_name}</span><small>{tool.connection_type === "mcp" ? "MCP" : "Custom · LangChain"} · {tool.effect}</small></button>)}</div></section>}
     {step === 3 && <div className="master-detail"><aside className="master-list"><div className="master-list-heading"><div><h2>Agent tools</h2><p>Configure copied tools.</p></div><button type="button" className="secondary-button" onClick={addTool}>New inline tool</button></div>{tools.length ? tools.map((tool, index) => <button type="button" className={selectedToolIndex === index ? "active" : ""} aria-pressed={selectedToolIndex === index} onClick={() => setSelectedToolIndex(index)} key={index}><span>{tool.name.trim() || `Untitled tool ${index + 1}`}</span><small>{tool.connection_type === "mcp" ? "MCP · saved only" : tool.enabled ? "Enabled" : "Disabled"}</small></button>) : <p className="master-empty">No tools added.</p>}</aside><section className="detail-panel">{selectedTool && selectedToolIndex !== null ? <div className="tool-editor"><button type="button" className="remove-button" onClick={removeSelectedTool}>Remove tool</button><label>Name<input value={selectedTool.name} onChange={(event) => updateTool(selectedToolIndex, "name", event.target.value)} /></label><label>Description<input value={selectedTool.description} onChange={(event) => updateTool(selectedToolIndex, "description", event.target.value)} /></label>{selectedTool.connection_type !== "mcp" && <PythonEditor value={selectedTool.source_code} onChange={(value) => updateTool(selectedToolIndex, "source_code", value)} />}<label>Approval policy<select value={selectedTool.approval_policy ?? "automatic"} onChange={(event) => updateTool(selectedToolIndex, "approval_policy", event.target.value)}><option value="automatic">Automatic</option><option value="ask">Ask (stored; not executed in v1)</option><option value="disabled">Disabled</option></select></label><label className="checkbox-label"><input type="checkbox" checked={selectedTool.enabled} onChange={(event) => updateTool(selectedToolIndex, "enabled", event.target.checked)} /> Enabled</label></div> : <p className="detail-empty">Select a tool or add one from the library.</p>}</section></div>}
-    {step === 4 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to configure.</p></div></div><button type="button" className={selectedGuardrail === "topics" ? "active" : ""} aria-pressed={selectedGuardrail === "topics"} onClick={() => setSelectedGuardrail("topics")}>Allowed topics</button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}>Out-of-scope response</button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "topics" ? <label>Allowed topics<input value={topics} onChange={(event) => setTopics(event.target.value)} placeholder="finance, portfolio analysis" /><small>Separate multiple topics with commas.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={7} placeholder="Response shown when a request is outside the allowed topics" /></label>}</section></div>}
+    {step === 4 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to configure.</p></div></div><button type="button" className={selectedGuardrail === "topics" ? "active" : ""} aria-pressed={selectedGuardrail === "topics"} onClick={() => setSelectedGuardrail("topics")}>Guardrail policy</button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}>Out-of-scope response</button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "topics" ? <label>Guardrail policy<textarea value={policyText} onChange={(event) => setPolicyText(event.target.value)} rows={9} placeholder="Describe which requests this agent may handle and any restrictions it must enforce." /><small>The model evaluates every user message against this policy before tools or normal chat run.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={7} placeholder="Response returned when the guardrail blocks a request" /></label>}</section></div>}
     {step === 5 && <div className="wizard-fields compact-step sharing-step"><div><h2>Sharing</h2><p>Agent sharing will be available in a future release.</p></div><label>Email ID<input type="email" disabled placeholder="person@example.com" /></label><span className="coming-soon-note">Coming soon — sharing is currently disabled.</span></div>}
-    {step === 6 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Initiative ID</dt><dd>{initiativeId || "None"}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Allowed topics</dt><dd>{topics || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd><dt>Sharing</dt><dd>Disabled</dd></dl></div>}
+    {step === 6 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Initiative ID</dt><dd>{initiativeId || "None"}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Guardrail policy</dt><dd>{policyText || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd><dt>Sharing</dt><dd>Disabled</dd></dl></div>}
     {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 6 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</button>}</div>
   </div></section></div>}</div>;
 }

@@ -4,7 +4,7 @@ from typing import Any
 
 from langchain_core.tools import StructuredTool
 
-from services.mcp_client import create_mcp_client
+from services.mcp_client import call_mcp_tool
 
 class ToolFunctionValidationError(ValueError):
     """Raised when an agent's inline tool definition is invalid."""
@@ -54,11 +54,11 @@ def build_langchain_tools(records: list[dict[str, Any]]) -> list[StructuredTool]
                 _defaults: dict[str, Any] = defaults,
                 **arguments: Any,
             ) -> dict[str, Any]:
-                async with create_mcp_client(_endpoint) as client:
-                    result = await client.call_tool(
-                        _external_name,
-                        {**_defaults, **arguments},
-                    )
+                result = await call_mcp_tool(
+                    _endpoint,
+                    _external_name,
+                    {**_defaults, **arguments},
+                )
                 return result.model_dump(mode="json")
 
             tools.append(

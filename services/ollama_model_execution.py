@@ -10,6 +10,7 @@ from utils.config import get_config
 from services.model_execution import (
     ModelExecutionError,
     ModelResponse,
+    classify_guardrail_request,
     get_model_response_attributes,
 )
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -39,6 +40,9 @@ class OllamaModelExecution:
     async def execute(self, prompt: str, system_prompts: list[str] | None = None) -> str:
         """Invoke the local model and return only its textual response."""
         return (await self.execute_with_metadata(prompt, system_prompts)).text
+
+    async def classify_guardrail(self, policy_text: str, prompt: str, history: list[BaseMessage]) -> bool:
+        return await classify_guardrail_request(self._chat_model, policy_text, prompt, history)
 
     async def execute_with_metadata(
         self,

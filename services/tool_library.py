@@ -2,18 +2,20 @@
 
 from contextlib import closing
 import json
+import logging
 import time
 from typing import Any
 from uuid import uuid4
 
 from mysql.connector import Error
 
-from services.mcp_client import create_mcp_client
+from services.mcp_client import call_mcp_tool, list_mcp_tools
 from services.tool_runtime import build_langchain_tools, validate_tool_definitions
 from utils.database import DatabaseUnavailableError, get_connection_pool
 
 
 JSON_FIELDS = {"input_schema", "output_schema", "examples", "output_preview"}
+logger = logging.getLogger(__name__)
 
 
 def _decode(row: dict[str, Any]) -> dict[str, Any]:
@@ -25,6 +27,41 @@ def _decode(row: dict[str, Any]) -> dict[str, Any]:
 
 def _database_error(message: str, exc: Error) -> DatabaseUnavailableError:
     return DatabaseUnavailableError(message)
+
+
+def _exception_summary(exc: BaseException, limit: int = 700) -> str:
+    """Flatten task-group wrappers into a useful, safe error summary."""
+    leaves: list[str] = []
+
+    def collect(item: BaseException) -> None:
+        if isinstance(item, BaseExceptionGroup):
+            for child in item.exceptions:
+                collect(child)
+            return
+        if type(item).__name__ in {"CancelledError", "Cancelled"}:
+            return
+        message = str(item).strip()
+        summary = f"{type(item).__name__}: {message}" if message else type(item).__name__
+        if summary not in leaves:
+            leaves.append(summary)
+
+    collect(exc)
+    summary = "; ".join(leaves) or f"{type(exc).__name__}: {str(exc).strip()}"
+    return summary[:limit]
+
+
+def _mcp_error_result_summary(payload: dict[str, Any]) -> str:
+    texts = [
+        str(item.get("text", "")).strip()
+        for item in payload.get("content", [])
+        if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+    ]
+    if texts:
+        return "; ".join(texts)[:700]
+    structured = payload.get("structured_content") or payload.get("structuredContent")
+    if structured is not None:
+        return json.dumps(structured, default=str)[:700]
+    return "MCP server returned an error result"
 
 
 def list_sources() -> list[dict[str, Any]]:
@@ -183,6 +220,25 @@ def create_source(values: dict[str, Any]) -> dict[str, Any]:
     return {"source_id": source_id, **values, "source_type": "mcp", "transport": "streamable_http", "status": "unavailable", "tool_count": 0}
 
 
+def update_source(source_id: str, values: dict[str, Any]) -> dict[str, Any] | None:
+    """Update editable metadata for one active MCP source."""
+    existing = _get_source(source_id)
+    if existing is None or existing.get("source_type") != "mcp":
+        return None
+    try:
+        with closing(get_connection_pool().get_connection()) as connection:
+            with closing(connection.cursor()) as cursor:
+                cursor.execute(
+                    "UPDATE tool_sources SET name=%s,description=%s,endpoint=%s "
+                    "WHERE source_id=%s AND source_type='mcp' AND isActive='Y'",
+                    (values["name"], values.get("description"), values["endpoint"], source_id),
+                )
+            connection.commit()
+    except Error as exc:
+        raise _database_error("Tool source update failed", exc) from exc
+    return _get_source(source_id)
+
+
 def create_custom_tool(values: dict[str, Any]) -> dict[str, Any]:
     record = {"name": values["name"], "description": values["description"], "source_code": values["source_code"], "enabled": True}
     validate_tool_definitions([record])
@@ -217,9 +273,8 @@ async def discover_source(source_id: str) -> dict[str, Any]:
         raise KeyError(source_id)
     started = time.monotonic()
     try:
-        async with create_mcp_client(source["endpoint"]) as client:
-            result = await client.list_tools()
-            discovered = [tool.model_dump(mode="json", by_alias=True) for tool in result.tools]
+        result = await list_mcp_tools(source["endpoint"], refresh=True)
+        discovered = [tool.model_dump(mode="json", by_alias=True) for tool in result.tools]
         _save_discovery(source_id, discovered, None)
         status = "available"
         error = None
@@ -283,14 +338,16 @@ async def test_tool(tool_definition_id: str, arguments: dict[str, Any], invoked_
     outcome, error, output = "success", None, None
     try:
         if definition["connection_type"] == "mcp":
-            async with create_mcp_client(definition["endpoint"]) as client:
-                result = await client.call_tool(definition["external_name"], arguments)
-                output = result.model_dump(mode="json")
+            result = await call_mcp_tool(definition["endpoint"], definition["external_name"], arguments)
+            output = result.model_dump(mode="json")
+            if result.is_error:
+                outcome, error = "error", _mcp_error_result_summary(output)
         else:
             record = {"name": definition["external_name"], "description": definition["description"], "source_code": definition["source_code"], "enabled": True}
             output = build_langchain_tools([record])[0].invoke(arguments)
     except Exception as exc:
-        outcome, error = "error", f"{type(exc).__name__}: {str(exc)[:700]}"
+        logger.exception("Tool execution failed for %s", tool_definition_id)
+        outcome, error, output = "error", _exception_summary(exc), None
     duration = int((time.monotonic() - started) * 1000)
     serialized_output = json.dumps(output, default=str) if output is not None else None
     safe_output = (

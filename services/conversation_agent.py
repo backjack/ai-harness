@@ -40,6 +40,29 @@ class ConversationAgent:
     async def execute(self, user_prompt: str, event_sink: Any | None = None) -> ModelResponse:
         """Send the current context and incoming prompt to the configured model."""
         self.last_accessed = time.monotonic()
+        policy_text = self._guardrail_policy_text()
+        if policy_text:
+            fallback = str(self.guardrails.get("out_of_scope_response") or "I can't help with that request.")
+            self._emit_guardrail_event(event_sink, "runtime.guardrail.evaluate.start", policy_text=policy_text)
+            try:
+                allowed = await self.executor.classify_guardrail(policy_text, user_prompt, list(self.history))
+            except Exception as exc:
+                logger.exception("Guardrail classification failed agent_id=%s", self.agent_id)
+                self._emit_guardrail_event(
+                    event_sink,
+                    "runtime.guardrail.evaluate.error",
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                    decision="blocked",
+                )
+                return ModelResponse(fallback, attributes={"guardrail": {"allowed": False, "classification_failed": True}})
+            self._emit_guardrail_event(
+                event_sink,
+                "runtime.guardrail.evaluate.allowed" if allowed else "runtime.guardrail.evaluate.blocked",
+                decision="allowed" if allowed else "blocked",
+            )
+            if not allowed:
+                return ModelResponse(fallback, attributes={"guardrail": {"allowed": False}})
         if event_sink is None:
             return await self.executor.execute_with_metadata(
                 user_prompt, self.system_prompts, list(self.history), self.tools
@@ -51,6 +74,22 @@ class ConversationAgent:
             self.tools,
             event_sink=event_sink,
         )
+
+    def _guardrail_policy_text(self) -> str:
+        policy = self.guardrails.get("policy_text")
+        if isinstance(policy, str) and policy.strip():
+            return policy.strip()
+        legacy_topics = self.guardrails.get("allowed_topics")
+        if isinstance(legacy_topics, list):
+            topics = [str(topic).strip() for topic in legacy_topics if str(topic).strip()]
+            if topics:
+                return "Only allow requests related to these topics: " + ", ".join(topics) + "."
+        return ""
+
+    @staticmethod
+    def _emit_guardrail_event(event_sink: Any | None, event: str, **payload: Any) -> None:
+        if event_sink is not None:
+            event_sink({"event": event, **payload})
 
     def add_successful_turn(self, user_prompt: str, response_text: str) -> None:
         """Add only a durably audited turn to the in-memory context."""

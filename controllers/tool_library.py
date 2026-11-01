@@ -5,7 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import AnyHttpUrl, BaseModel, Field
 
-from services.tool_library import create_custom_tool, create_source, deactivate_source, deactivate_tool, discover_source, get_tool, list_executions, list_sources, list_tools, test_tool
+from services.tool_library import create_custom_tool, create_source, deactivate_source, deactivate_tool, discover_source, get_tool, list_executions, list_sources, list_tools, test_tool, update_source
 from services.tool_runtime import ToolFunctionValidationError
 from utils.database import DatabaseUnavailableError
 
@@ -18,6 +18,12 @@ class McpSourceCreate(BaseModel):
     description: str | None = None
     endpoint: AnyHttpUrl
     owner_email: str = Field(min_length=3, max_length=320)
+
+
+class McpSourceUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    endpoint: AnyHttpUrl
 
 
 class CustomToolCreate(BaseModel):
@@ -60,6 +66,18 @@ async def create_source_endpoint(request: McpSourceCreate) -> dict[str, Any]:
 async def test_source_endpoint(source_id: str) -> dict[str, Any]:
     try: return await discover_source(source_id)
     except KeyError as exc: raise HTTPException(status_code=404, detail="Tool source not found") from exc
+    except DatabaseUnavailableError as exc: raise _db_error(exc) from exc
+
+
+@router.patch("/tool-sources/{source_id}")
+async def update_source_endpoint(source_id: str, request: McpSourceUpdate) -> dict[str, Any]:
+    try:
+        source = update_source(source_id, {**request.model_dump(mode="json"), "endpoint": str(request.endpoint)})
+        if source is None:
+            raise HTTPException(status_code=404, detail="Tool source not found")
+        test = await discover_source(source_id)
+        source.update({"status": test["status"], "tool_count": test["tool_count"], "last_error": test["error"], "test": test})
+        return source
     except DatabaseUnavailableError as exc: raise _db_error(exc) from exc
 
 

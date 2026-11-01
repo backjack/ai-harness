@@ -2,6 +2,7 @@
 
 import logging
 import os
+import json
 from functools import lru_cache
 from typing import Any
 
@@ -13,6 +14,23 @@ from services.langchain_tracing import LangChainTrace, invoke_model_with_tools
 
 
 logger = logging.getLogger("ai_harness.model_execution")
+
+GUARDRAIL_CLASSIFIER_PROMPT = """You are a strict policy classifier. Decide whether the current user request is allowed by the supplied guardrail policy. Use conversation history only to understand follow-up references. Return only JSON in this exact shape: {\"allowed\": true} or {\"allowed\": false}. Do not answer the request and do not call tools."""
+
+
+async def classify_guardrail_request(chat_model: Any, policy_text: str, prompt: str, history: list[BaseMessage]) -> bool:
+    """Return the model's strict allow/block decision for one user turn."""
+    context = "\n".join(f"{getattr(message, 'type', 'message')}: {message.content}" for message in history[-10:])
+    request = f"Guardrail policy:\n{policy_text}\n\nConversation history:\n{context or '(none)'}\n\nCurrent user request:\n{prompt}"
+    response = await chat_model.ainvoke([SystemMessage(content=GUARDRAIL_CLASSIFIER_PROMPT), HumanMessage(content=request)])
+    content = str(getattr(response, "content", "")).strip()
+    start, end = content.find("{"), content.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("Guardrail classifier did not return JSON")
+    decision = json.loads(content[start:end + 1])
+    if not isinstance(decision.get("allowed"), bool):
+        raise ValueError("Guardrail classifier returned an invalid decision")
+    return decision["allowed"]
 
 
 class ModelExecutionError(Exception):
@@ -69,6 +87,9 @@ class ModelExecution:
     async def execute(self, prompt: str, system_prompts: list[str] | None = None) -> str:
         """Invoke the model and return only its textual response."""
         return (await self.execute_with_metadata(prompt, system_prompts)).text
+
+    async def classify_guardrail(self, policy_text: str, prompt: str, history: list[BaseMessage]) -> bool:
+        return await classify_guardrail_request(self._chat_model, policy_text, prompt, history)
 
     async def execute_with_metadata(
         self,
