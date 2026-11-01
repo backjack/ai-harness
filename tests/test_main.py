@@ -558,6 +558,116 @@ def test_conversation_guardrail_classifier_failure_blocks_safely() -> None:
     assert result.attributes["guardrail"]["classification_failed"] is True
 
 
+def test_conversation_guardrail_generates_agent_refusal_when_no_custom_fallback() -> None:
+    from services.conversation_agent import ConversationAgent
+
+    captured_calls: list[dict[str, object]] = []
+
+    class FakeExecutor:
+        async def classify_guardrail(self, policy: str, prompt: str, history: list[object]) -> bool:
+            return False
+
+        async def execute_with_metadata(
+            self,
+            prompt: str,
+            system_prompts: list[str],
+            history: list[object],
+            tools: list[object],
+            **kwargs: object,
+        ) -> ModelResponse:
+            captured_calls.append({
+                "prompt": prompt,
+                "system_prompts": system_prompts,
+                "history": history,
+                "tools": tools,
+            })
+            return ModelResponse(
+                "I am a financial assistant and can only help with stock queries. I cannot write poetry.",
+                attributes={"model": "fake"},
+            )
+
+    runtime = ConversationAgent(
+        agent_id="agent-1",
+        session_id="session-1",
+        system_prompts=["You are a financial analyst."],
+        executor=FakeExecutor(),
+        history=[HumanMessage(content="Hello")],
+        guardrails={"policy_text": "Only financial queries allowed."},
+        tools=[object()],
+        definition_signature="signature",
+    )
+
+    result = asyncio.run(runtime.execute("Write a poem"))
+
+    assert result.text == "I am a financial assistant and can only help with stock queries. I cannot write poetry."
+    assert result.attributes["guardrail"]["allowed"] is False
+    assert len(captured_calls) == 1
+    call = captured_calls[0]
+    assert call["prompt"] == "Write a poem"
+    assert call["tools"] == []
+    assert any("You are a financial analyst." in p for p in call["system_prompts"])
+    assert any("The user's request cannot be fulfilled" in p for p in call["system_prompts"])
+
+
+def test_conversation_guardrail_meaningful_default_fallback_without_model() -> None:
+    from services.conversation_agent import ConversationAgent
+
+    class ClassifyOnlyExecutor:
+        async def classify_guardrail(self, *args: object) -> bool:
+            return False
+
+        async def execute_with_metadata(self, *args: object, **kwargs: object) -> ModelResponse:
+            raise RuntimeError("Model execution unavailable")
+
+    runtime = ConversationAgent(
+        agent_id="agent-1",
+        session_id="session-1",
+        system_prompts=[],
+        executor=ClassifyOnlyExecutor(),
+        history=[],
+        guardrails={"allowed_topics": ["stocks", "bonds"]},
+        tools=[],
+        definition_signature="signature",
+    )
+
+    result = asyncio.run(runtime.execute("Bake bread"))
+
+    assert "I'm sorry, but I can only assist with requests related to: stocks, bonds." in result.text
+    assert result.attributes["guardrail"]["allowed"] is False
+
+
+def test_conversation_guardrail_legacy_unhelpful_string_replaced_by_agent() -> None:
+    from services.conversation_agent import ConversationAgent
+
+    class FakeExecutor:
+        async def classify_guardrail(self, *args: object) -> bool:
+            return False
+
+        async def execute_with_metadata(
+            self, prompt: str, system_prompts: list[str], *args: object, **kwargs: object
+        ) -> ModelResponse:
+            return ModelResponse("I can only assist with investment guidance.")
+
+    runtime = ConversationAgent(
+        agent_id="agent-1",
+        session_id="session-1",
+        system_prompts=["Help with investments."],
+        executor=FakeExecutor(),
+        history=[],
+        guardrails={
+            "policy_text": "Only investments.",
+            "out_of_scope_response": "I can't help with that request.",
+        },
+        tools=[],
+        definition_signature="signature",
+    )
+
+    result = asyncio.run(runtime.execute("Bake cookies"))
+
+    assert result.text == "I can only assist with investment guidance."
+    assert result.attributes["guardrail"]["allowed"] is False
+
+
 def test_chat_stream_emits_model_progress_then_final_response(monkeypatch) -> None:
     class AsyncLock:
         async def __aenter__(self) -> None:
