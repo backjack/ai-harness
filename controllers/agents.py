@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from utils.database import DatabaseUnavailableError
-from services.agent_repository import create_agent, get_agent, list_agents, update_agent
+from services.agent_repository import create_agent, deactivate_agent, get_agent, list_agents, update_agent
 from services.tool_runtime import ToolFunctionValidationError, validate_tool_definitions
 
 
@@ -19,14 +19,25 @@ class AgentTool(BaseModel):
 
     name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", max_length=255)
     description: str = Field(min_length=1, max_length=2000)
-    source_code: str = Field(min_length=1)
+    source_code: str = ""
     enabled: bool = True
+    connection_type: Literal["custom_langchain", "mcp"] = "custom_langchain"
+    tool_definition_id: str | None = None
+    source_id: str | None = None
+    version: str | None = None
+    category: str = "Other"
+    effect: Literal["read", "calculate", "write", "delete", "unknown"] = "unknown"
+    effect_source: str = "unknown"
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    approval_policy: Literal["automatic", "ask", "disabled"] = "automatic"
+    allowed_scope: dict[str, Any] = Field(default_factory=dict)
+    defaults: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentBase(BaseModel):
     agent_name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=4000)
-    workflow: str = Field(default="", max_length=10000)
+    initiative_id: str | None = Field(default=None, max_length=255)
     owner_email: str = Field(min_length=3, max_length=320)
     shared_with: list[str] = Field(default_factory=list)
     model_id: str = Field(min_length=1, max_length=255)
@@ -40,6 +51,7 @@ class AgentBase(BaseModel):
 
 
 class AgentCreate(AgentBase):
+    faq: dict[str, str] | None = None
     created_by: str = Field(min_length=3, max_length=320)
 
     model_config = ConfigDict(
@@ -70,7 +82,8 @@ class AgentCreate(AgentBase):
 class AgentUpdate(BaseModel):
     agent_name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=4000)
-    workflow: str | None = Field(default=None, max_length=10000)
+    initiative_id: str | None = Field(default=None, max_length=255)
+    faq: dict[str, str] | None = None
     owner_email: str | None = Field(default=None, min_length=3, max_length=320)
     shared_with: list[str] | None = None
     model_id: str | None = Field(default=None, min_length=1, max_length=255)
@@ -86,6 +99,12 @@ class AgentResponse(AgentBase):
     created_by: str
     created_at: datetime
     last_updated_at: datetime
+
+
+class AgentDetailResponse(AgentResponse):
+    faq: dict[str, str] = Field(default_factory=dict)
+
+
 def _database_error(exc: DatabaseUnavailableError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -93,7 +112,7 @@ def _database_error(exc: DatabaseUnavailableError) -> HTTPException:
     )
 
 
-@router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=AgentDetailResponse, status_code=status.HTTP_201_CREATED)
 async def create_agent_endpoint(request: AgentCreate) -> dict[str, Any]:
     """Create an agent definition."""
     try:
@@ -113,7 +132,7 @@ async def list_agents_endpoint() -> list[dict[str, Any]]:
         raise _database_error(exc) from exc
 
 
-@router.get("/{agent_id}", response_model=AgentResponse)
+@router.get("/{agent_id}", response_model=AgentDetailResponse)
 async def get_agent_endpoint(agent_id: str) -> dict[str, Any]:
     """Get one agent definition."""
     try:
@@ -125,7 +144,7 @@ async def get_agent_endpoint(agent_id: str) -> dict[str, Any]:
     return agent
 
 
-@router.patch("/{agent_id}", response_model=AgentResponse)
+@router.patch("/{agent_id}", response_model=AgentDetailResponse)
 async def update_agent_endpoint(agent_id: str, request: AgentUpdate) -> dict[str, Any]:
     """Partially update an agent definition."""
     try:
@@ -135,3 +154,14 @@ async def update_agent_endpoint(agent_id: str, request: AgentUpdate) -> dict[str
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return agent
+
+
+@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent_endpoint(agent_id: str) -> None:
+    """Soft-delete an agent definition."""
+    try:
+        deleted = deactivate_agent(agent_id)
+    except DatabaseUnavailableError as exc:
+        raise _database_error(exc) from exc
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")

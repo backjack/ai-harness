@@ -203,6 +203,9 @@ async def invoke_model_with_tools(
                 "runtime.tool.message.appended",
                 iteration=iteration,
                 tool_call_id=call["id"],
+                tool_name=tool_name,
+                arguments=arguments,
+                result=result,
                 message=tool_message,
             )
 

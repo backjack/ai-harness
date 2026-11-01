@@ -19,6 +19,7 @@ from services.tool_runtime import build_langchain_tools
 logger = logging.getLogger("ai_harness.conversation_agent")
 
 HIGHCHARTS_CHART_SYSTEM_PROMPT = """When the user explicitly asks for a chart or visualization, return only valid JSON with no Markdown fences or prose: {\"type\":\"chart\",\"content\":{\"library\":\"highcharts\",\"options\":{...}}}. The options value must be a JSON-serializable Highcharts configuration with chart, title, axes as needed, and series. Use only facts available from tools or the conversation; do not invent financial data. For non-chart requests, respond normally."""
+TOOL_USE_SYSTEM_PROMPT = """When a tool is relevant, populate every declared tool input from the user's current request and relevant conversation history. Respect the tool's input schema, include all required fields, and do not invent or send undeclared fields."""
 
 
 @dataclass
@@ -102,14 +103,48 @@ class ConversationAgentCache:
                 ]
             )
 
+        tooling = agent.get("tooling") or []
+        tool_definition_ids = [
+            tool["tool_definition_id"]
+            for tool in tooling
+            if tool.get("tool_definition_id")
+        ]
+        if tool_definition_ids:
+            from services.tool_library import get_tools_by_ids
+
+            catalog = {
+                tool["tool_definition_id"]: tool
+                for tool in get_tools_by_ids(tool_definition_ids)
+            }
+            enriched_tooling = []
+            for tool in tooling:
+                tool_definition_id = tool.get("tool_definition_id")
+                if not tool_definition_id:
+                    enriched_tooling.append(tool)
+                    continue
+                definition = catalog.get(tool_definition_id)
+                if definition is None:
+                    continue
+                merged = {**tool, **definition}
+                for binding_field in ("enabled", "approval_policy", "defaults", "allowed_scope"):
+                    if binding_field in tool:
+                        merged[binding_field] = tool[binding_field]
+                enriched_tooling.append(merged)
+            tooling = enriched_tooling
+
+        runtime_tools = build_langchain_tools(tooling)
+        system_prompts = [*(agent.get("system_prompts") or []), HIGHCHARTS_CHART_SYSTEM_PROMPT]
+        if runtime_tools:
+            system_prompts.append(TOOL_USE_SYSTEM_PROMPT)
+
         return ConversationAgent(
             agent_id=agent["agent_id"],
             session_id=session_id,
-            system_prompts=[*(agent.get("system_prompts") or []), HIGHCHARTS_CHART_SYSTEM_PROMPT],
+            system_prompts=system_prompts,
             executor=get_model_execution(agent["model_type"], agent["model_id"]),
             history=history[-config.chat_history_message_limit :],
             guardrails=agent.get("guardrails") or {},
-            tools=build_langchain_tools(agent.get("tooling") or []),
+            tools=runtime_tools,
             definition_signature=self._definition_signature(agent),
         )
 
@@ -121,16 +156,9 @@ class ConversationAgentCache:
                 "model_type": agent["model_type"],
                 "model_id": agent["model_id"],
                 "system_prompts": agent.get("system_prompts") or [],
-                "tooling": [
-                    {
-                        "name": tool["name"],
-                        "description": tool["description"],
-                        "source_code": tool["source_code"],
-                        "enabled": tool["enabled"],
-                    }
-                    for tool in agent.get("tooling") or []
-                ],
+                "tooling": agent.get("tooling") or [],
                 "guardrails": agent.get("guardrails") or {},
+                "last_updated_at": str(agent.get("last_updated_at") or ""),
             },
             sort_keys=True,
         )

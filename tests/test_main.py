@@ -12,7 +12,9 @@ from fastapi.testclient import TestClient
 from main import app
 from controllers.service_status import _classify_message
 from services.analytics import get_analytics_report
-from services.agent_repository import _decode_agent
+from services.agent_repository import _decode_agent, _serialize_agent_values
+from services.chat_events import ChatEventSink
+from services.tool_library import discover_source
 from utils.config import get_config
 from services.model_execution import (
     ModelExecution,
@@ -38,7 +40,8 @@ def agent_record() -> dict[str, object]:
         "agent_id": "11111111-1111-1111-1111-111111111111",
         "agent_name": "Assistant",
         "description": "Helpful assistant.",
-        "workflow": "Answer clearly.",
+        "initiative_id": "initiative-123",
+        "faq": {"What can you do?": "I can help."},
         "owner_email": "owner@example.com",
         "shared_with": [],
         "model_id": "gpt-5.4-mini",
@@ -657,7 +660,8 @@ def test_create_agent_returns_persisted_agent(monkeypatch) -> None:
         json={
             "agent_name": "Assistant",
             "description": "Helpful assistant.",
-            "workflow": "Answer clearly.",
+            "initiative_id": "initiative-123",
+            "faq": {"What can you do?": "I can help."},
             "owner_email": "owner@example.com",
             "model_id": "gpt-5.4-mini",
             "tooling": [],
@@ -669,7 +673,97 @@ def test_create_agent_returns_persisted_agent(monkeypatch) -> None:
     assert response.status_code == 201
     assert response.json()["agent_id"] == agent_record()["agent_id"]
     assert captured["description"] == "Helpful assistant."
-    assert captured["workflow"] == "Answer clearly."
+    assert captured["initiative_id"] == "initiative-123"
+    assert captured["faq"] == {"What can you do?": "I can help."}
+
+
+def test_create_agent_defaults_faq_to_null_storage_and_empty_response(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def persist(values: dict[str, object]) -> dict[str, object]:
+        captured.update(values)
+        stored = agent_record()
+        stored["faq"] = {}
+        return stored
+
+    monkeypatch.setattr("controllers.agents.create_agent", persist)
+
+    response = client.post(
+        "/api/agents",
+        json={
+            "agent_name": "Assistant",
+            "owner_email": "owner@example.com",
+            "model_id": "gpt-5.4-mini",
+            "model_type": "openai",
+            "created_by": "owner@example.com",
+        },
+    )
+
+    assert response.status_code == 201
+    assert captured["faq"] is None
+    assert response.json()["faq"] == {}
+
+
+def test_create_agent_accepts_null_faq(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def persist(values: dict[str, object]) -> dict[str, object]:
+        captured.update(values)
+        stored = agent_record()
+        stored["faq"] = {}
+        return stored
+
+    monkeypatch.setattr("controllers.agents.create_agent", persist)
+
+    response = client.post(
+        "/api/agents",
+        json={
+            "agent_name": "Assistant",
+            "owner_email": "owner@example.com",
+            "model_id": "gpt-5.4-mini",
+            "model_type": "openai",
+            "created_by": "owner@example.com",
+            "faq": None,
+        },
+    )
+
+    assert response.status_code == 201
+    assert captured["faq"] is None
+    assert response.json()["faq"] == {}
+
+
+def test_agent_detail_returns_faq_but_list_omits_it(monkeypatch) -> None:
+    stored = agent_record()
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id: stored)
+    monkeypatch.setattr("controllers.agents.list_agents", lambda: [stored])
+
+    detail_response = client.get(f"/api/agents/{stored['agent_id']}")
+    list_response = client.get("/api/agents")
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()["faq"] == stored["faq"]
+    assert list_response.status_code == 200
+    assert "faq" not in list_response.json()[0]
+
+
+@pytest.mark.parametrize(
+    "faq",
+    [[], {"Question": 123}],
+)
+def test_create_agent_rejects_invalid_faq(faq: object) -> None:
+    response = client.post(
+        "/api/agents",
+        json={
+            "agent_name": "Assistant",
+            "owner_email": "owner@example.com",
+            "model_id": "gpt-5.4-mini",
+            "model_type": "openai",
+            "created_by": "owner@example.com",
+            "faq": faq,
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_create_agent_accepts_inline_python_tool(monkeypatch) -> None:
@@ -733,6 +827,56 @@ def test_decode_agent_preserves_valid_tooling() -> None:
     assert decoded["tooling"] == stored_agent["tooling"]
 
 
+def test_decode_agent_normalizes_faq_json_and_null() -> None:
+    stored_agent = agent_record()
+    stored_agent["faq"] = '{"Question": "Answer"}'
+
+    decoded = _decode_agent(stored_agent)
+
+    assert decoded is not None
+    assert decoded["faq"] == {"Question": "Answer"}
+
+    stored_agent["faq"] = None
+    decoded = _decode_agent(stored_agent)
+
+    assert decoded is not None
+    assert decoded["faq"] == {}
+
+
+def test_decode_agent_normalizes_null_description_to_empty_string() -> None:
+    stored_agent = agent_record()
+    stored_agent["description"] = None
+
+    decoded = _decode_agent(stored_agent)
+
+    assert decoded is not None
+    assert decoded["description"] == ""
+
+
+def test_agent_endpoints_return_empty_string_for_null_description(monkeypatch) -> None:
+    stored = agent_record()
+    stored["description"] = None
+    decoded = _decode_agent(stored)
+    assert decoded is not None
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id: decoded)
+    monkeypatch.setattr("controllers.agents.list_agents", lambda: [decoded])
+
+    detail_response = client.get(f"/api/agents/{decoded['agent_id']}")
+    list_response = client.get("/api/agents")
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()["description"] == ""
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["description"] == ""
+
+
+def test_serialize_agent_values_preserves_null_faq_as_sql_null() -> None:
+    serialized = _serialize_agent_values({"faq": None, "guardrails": None})
+
+    assert serialized["faq"] is None
+    assert serialized["guardrails"] == "null"
+
+
 def test_update_agent_returns_not_found(monkeypatch) -> None:
     monkeypatch.setattr("controllers.agents.update_agent", lambda agent_id, values: None)
 
@@ -740,6 +884,315 @@ def test_update_agent_returns_not_found(monkeypatch) -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Agent not found"}
+
+
+def test_update_agent_persists_initiative_id(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def update(agent_id: str, values: dict[str, object]) -> dict[str, object]:
+        captured.update(values)
+        stored = agent_record()
+        stored.update(values)
+        return stored
+
+    monkeypatch.setattr("controllers.agents.update_agent", update)
+
+    response = client.patch(
+        "/api/agents/11111111-1111-1111-1111-111111111111",
+        json={"initiative_id": "initiative-456"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["initiative_id"] == "initiative-456"
+    assert captured["initiative_id"] == "initiative-456"
+
+
+def test_update_agent_persists_faq(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def update(agent_id: str, values: dict[str, object]) -> dict[str, object]:
+        captured.update(values)
+        stored = agent_record()
+        stored.update(values)
+        return stored
+
+    monkeypatch.setattr("controllers.agents.update_agent", update)
+
+    faq = {"How does this work?": "It is stored as agent metadata."}
+    response = client.patch(
+        "/api/agents/11111111-1111-1111-1111-111111111111",
+        json={"faq": faq},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["faq"] == faq
+    assert captured["faq"] == faq
+
+
+def test_update_agent_clears_faq_with_null(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def update(agent_id: str, values: dict[str, object]) -> dict[str, object]:
+        captured.update(values)
+        stored = agent_record()
+        stored["faq"] = {}
+        return stored
+
+    monkeypatch.setattr("controllers.agents.update_agent", update)
+
+    response = client.patch(
+        "/api/agents/11111111-1111-1111-1111-111111111111",
+        json={"faq": None},
+    )
+
+    assert response.status_code == 200
+    assert captured["faq"] is None
+    assert response.json()["faq"] == {}
+
+
+def test_delete_agent_soft_deactivates(monkeypatch) -> None:
+    monkeypatch.setattr("controllers.agents.deactivate_agent", lambda agent_id: agent_id == "agent-1")
+
+    assert client.delete("/api/agents/agent-1").status_code == 204
+    missing = client.delete("/api/agents/missing")
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Agent not found"
+
+
+def test_delete_tool_soft_deactivates(monkeypatch) -> None:
+    monkeypatch.setattr("controllers.tool_library.deactivate_tool", lambda tool_id: tool_id == "tool-1")
+
+    assert client.delete("/api/tools/tool-1").status_code == 204
+    assert client.delete("/api/tools/missing").status_code == 404
+
+
+def test_delete_mcp_source_soft_deactivates_source_and_tools(monkeypatch) -> None:
+    monkeypatch.setattr("controllers.tool_library.deactivate_source", lambda source_id: source_id == "source-1")
+
+    assert client.delete("/api/tool-sources/source-1").status_code == 204
+    assert client.delete("/api/tool-sources/missing").status_code == 404
+
+
+def test_tool_library_lists_persisted_definitions(monkeypatch) -> None:
+    monkeypatch.setattr("controllers.tool_library.list_tools", lambda **filters: [{
+        "tool_definition_id": "tool-1", "source_id": "source-1", "external_name": "find_invoices",
+        "display_name": "Find invoices", "description": "Find overdue invoices.",
+        "connection_type": "mcp", "input_schema": {"type": "object"}, "output_schema": None,
+        "version": None, "category": "Finance", "effect": "read", "effect_source": "provider_declared",
+        "status": "available", "examples": [], "output_preview": None, "source_code": None,
+        "enabled": True, "source_name": "SMB Sandbox", "owner_email": "owner@example.com", "endpoint": "http://sandbox/mcp",
+    }])
+
+    response = client.get("/api/tools?connection=mcp&effect=read")
+
+    assert response.status_code == 200
+    assert response.json()[0]["display_name"] == "Find invoices"
+
+
+def test_mcp_registration_is_saved_when_discovery_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr("controllers.tool_library.create_source", lambda values: {
+        "source_id": "source-1", **values, "source_type": "mcp", "transport": "streamable_http",
+        "status": "unavailable", "tool_count": 0,
+    })
+
+    async def unavailable(source_id: str) -> dict[str, object]:
+        return {"source_id": source_id, "status": "unavailable", "tool_count": 0, "error": "ConnectionError", "duration_ms": 12}
+
+    monkeypatch.setattr("controllers.tool_library.discover_source", unavailable)
+    response = client.post("/api/tool-sources/mcp", json={
+        "name": "SMB Sandbox", "description": "Invoice tools", "endpoint": "http://sandbox/mcp", "owner_email": "owner@example.com",
+    })
+
+    assert response.status_code == 201
+    assert response.json()["source_id"] == "source-1"
+    assert response.json()["test"]["status"] == "unavailable"
+
+
+def test_mcp_discovery_serializes_tool_schema_by_alias(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeTool:
+        def model_dump(self, *, mode: str, by_alias: bool) -> dict[str, object]:
+            assert mode == "json"
+            assert by_alias is True
+            return {
+                "name": "search_messages", "description": "Search Microsoft messages.",
+                "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+                "outputSchema": {"type": "object"},
+            }
+
+    class FakeClient:
+        def __init__(self, endpoint: str) -> None:
+            assert endpoint == "https://microsoft.example.test/mcp"
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def list_tools(self) -> SimpleNamespace:
+            return SimpleNamespace(tools=[FakeTool()])
+
+    monkeypatch.setattr("services.tool_library.create_mcp_client", FakeClient)
+    monkeypatch.setattr("services.tool_library._get_source", lambda source_id: {"source_id": source_id, "endpoint": "https://microsoft.example.test/mcp"})
+    monkeypatch.setattr("services.tool_library._save_discovery", lambda source_id, tools, error, **kwargs: captured.update({"tools": tools, "error": error}))
+
+    result = asyncio.run(discover_source("source-1"))
+
+    assert result["status"] == "available"
+    assert captured["error"] is None
+    assert captured["tools"][0]["inputSchema"]["required"] == ["query"]
+
+
+def test_conversation_runtime_prefers_refreshed_mcp_schema_and_binding_settings(monkeypatch) -> None:
+    from services.conversation_agent import ConversationAgentCache
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("services.conversation_agent.get_config", lambda: SimpleNamespace(chat_history_message_limit=10))
+    monkeypatch.setattr("services.conversation_agent.get_session_history", lambda *args: [])
+    monkeypatch.setattr("services.conversation_agent.get_model_execution", lambda *args: object())
+    monkeypatch.setattr("services.tool_library.get_tools_by_ids", lambda ids: [{
+        "tool_definition_id": "tool-1", "external_name": "search_messages", "description": "Current description",
+        "connection_type": "mcp", "endpoint": "https://microsoft.example.test/mcp", "status": "available",
+        "source_status": "available", "enabled": True,
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    }])
+    monkeypatch.setattr("services.conversation_agent.build_langchain_tools", lambda records: captured.update({"records": records}) or [object()])
+    agent = agent_record()
+    agent["tooling"] = [{
+        "name": "search_messages", "description": "Stale description", "source_code": "", "connection_type": "mcp",
+        "tool_definition_id": "tool-1", "enabled": False, "approval_policy": "ask", "defaults": {"limit": 5},
+        "allowed_scope": {"mailbox": "current"}, "input_schema": {},
+    }]
+
+    runtime = ConversationAgentCache()._create_runtime_agent(agent, "session-1")
+    record = captured["records"][0]
+
+    assert record["input_schema"]["required"] == ["query"]
+    assert record["description"] == "Current description"
+    assert record["enabled"] is False
+    assert record["approval_policy"] == "ask"
+    assert record["defaults"] == {"limit": 5}
+    assert runtime.system_prompts[-1].startswith("When a tool is relevant")
+
+
+def test_agent_accepts_non_executable_mcp_tool_snapshot(monkeypatch) -> None:
+    stored = agent_record()
+    stored["tooling"] = [{
+        "name": "find_invoices", "description": "Find overdue invoices.", "source_code": "", "enabled": True,
+        "connection_type": "mcp", "tool_definition_id": "tool-1", "source_id": "source-1",
+        "input_schema": {"type": "object"}, "category": "Finance", "effect": "read",
+    }]
+    monkeypatch.setattr("controllers.agents.create_agent", lambda values: stored)
+
+    response = client.post("/api/agents", json={
+        "agent_name": "Invoice Assistant", "owner_email": "owner@example.com", "model_id": "gpt-5.4-mini",
+        "model_type": "openai", "created_by": "owner@example.com", "tooling": stored["tooling"],
+    })
+
+    assert response.status_code == 201
+    assert response.json()["tooling"][0]["connection_type"] == "mcp"
+    assert build_langchain_tools(stored["tooling"]) == []
+
+
+def test_available_mcp_tool_executes_with_defaults(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class FakeResult:
+        def model_dump(self, *, mode: str) -> dict[str, object]:
+            assert mode == "json"
+            return {"content": [{"type": "text", "text": "sunny"}], "isError": False}
+
+    class FakeClient:
+        def __init__(self, endpoint: str) -> None:
+            assert endpoint == "https://mcp.example.test/tools"
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def call_tool(self, name: str, arguments: dict[str, object]) -> FakeResult:
+            calls.append((name, arguments))
+            return FakeResult()
+
+    monkeypatch.setattr("services.tool_runtime.create_mcp_client", FakeClient)
+    tool = build_langchain_tools([{
+        "name": "weather", "external_name": "get_weather", "description": "Get weather.",
+        "connection_type": "mcp", "enabled": True, "approval_policy": "automatic",
+        "endpoint": "https://mcp.example.test/tools", "status": "available", "source_status": "available",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        "defaults": {"units": "metric"},
+    }])[0]
+
+    result = asyncio.run(tool.ainvoke({"city": "London"}))
+
+    assert tool.name == "get_weather"
+    assert calls == [("get_weather", {"units": "metric", "city": "London"})]
+    assert result["isError"] is False
+
+
+def test_shared_mcp_client_disables_delete_termination(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_transport(endpoint: str, *, terminate_on_close: bool) -> object:
+        captured.update({"endpoint": endpoint, "terminate_on_close": terminate_on_close})
+        return object()
+
+    class FakeClient:
+        def __init__(self, transport: object) -> None:
+            captured["transport"] = transport
+
+    monkeypatch.setattr("mcp.Client", FakeClient)
+    monkeypatch.setattr("mcp.client.streamable_http.streamable_http_client", fake_transport)
+
+    from services.mcp_client import create_mcp_client
+
+    create_mcp_client("https://learn.microsoft.com/api/mcp")
+
+    assert captured["endpoint"] == "https://learn.microsoft.com/api/mcp"
+    assert captured["terminate_on_close"] is False
+
+
+def test_post_only_mcp_filter_hides_only_known_compatibility_noise() -> None:
+    from services.mcp_client import _PostOnlyMcpNoiseFilter
+
+    noise_filter = _PostOnlyMcpNoiseFilter()
+
+    def record(logger: str, message: str) -> logging.LogRecord:
+        return logging.LogRecord(logger, logging.INFO, __file__, 1, message, (), None)
+
+    assert noise_filter.filter(record(
+        "httpx2",
+        'HTTP Request: GET https://learn.microsoft.com/api/mcp "HTTP/1.1 405 Method Not Allowed"',
+    )) is False
+    assert noise_filter.filter(record(
+        "mcp.client.streamable_http",
+        "GET stream disconnected, reconnecting in 1000ms...",
+    )) is False
+    assert noise_filter.filter(record(
+        "httpx2",
+        'HTTP Request: POST https://learn.microsoft.com/api/mcp "HTTP/1.1 500 Internal Server Error"',
+    )) is True
+
+
+def test_chat_event_sink_promotes_tool_execution_fields() -> None:
+    sink = ChatEventSink()
+    sink({
+        "event": "runtime.tool.invoke.end", "tool_name": "get_weather", "tool_call_id": "call-1",
+        "arguments": {"city": "London"}, "result": {"temperature": 18}, "duration_ms": 12.5,
+    })
+
+    event = sink.queue.get_nowait()
+
+    assert event["type"] == "runtime.tool.invoke.end"
+    assert event["tool_name"] == "get_weather"
+    assert event["arguments"] == {"city": "London"}
+    assert event["result"] == {"temperature": 18}
+    assert event["duration_ms"] == 12.5
+    assert event["payload"]["tool_call_id"] == "call-1"
 
 
 def test_model_execution_logs_provider_failure_without_prompt(monkeypatch, caplog) -> None:
@@ -966,5 +1419,9 @@ def test_model_execution_runs_tool_call_then_returns_final_answer(monkeypatch, c
     assert all(event["trace_id"] == trace_events[0]["trace_id"] for event in trace_events)
     tool_start = next(event for event in trace_events if event["event"] == "runtime.tool.invoke.start")
     tool_end = next(event for event in trace_events if event["event"] == "runtime.tool.invoke.end")
+    tool_message = next(event for event in trace_events if event["event"] == "runtime.tool.message.appended")
     assert tool_start["arguments"] == {"stock_price": 12.5}
     assert tool_end["result"] == 25.0
+    assert tool_message["tool_name"] == "doublePrice"
+    assert tool_message["arguments"] == {"stock_price": 12.5}
+    assert tool_message["result"] == 25.0

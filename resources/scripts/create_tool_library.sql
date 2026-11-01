@@ -1,0 +1,81 @@
+CREATE TABLE IF NOT EXISTS tool_sources (
+    source_id CHAR(36) NOT NULL,
+    source_type VARCHAR(32) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    endpoint VARCHAR(2048) NULL,
+    transport VARCHAR(64) NULL,
+    owner_email VARCHAR(320) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'unavailable',
+    last_error TEXT NULL,
+    last_checked_at DATETIME(6) NULL,
+    isActive CHAR(1) NOT NULL DEFAULT 'Y',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    last_updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (source_id),
+    INDEX idx_tool_sources_type_status (source_type, status),
+    INDEX idx_tool_sources_is_active (isActive)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS tool_definitions (
+    tool_definition_id CHAR(36) NOT NULL,
+    source_id CHAR(36) NOT NULL,
+    external_name VARCHAR(255) NOT NULL,
+    display_name VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    connection_type VARCHAR(32) NOT NULL,
+    input_schema JSON NOT NULL,
+    output_schema JSON NULL,
+    version VARCHAR(100) NULL,
+    category VARCHAR(100) NOT NULL DEFAULT 'Other',
+    effect VARCHAR(32) NOT NULL DEFAULT 'unknown',
+    effect_source VARCHAR(32) NOT NULL DEFAULT 'unknown',
+    status VARCHAR(32) NOT NULL DEFAULT 'available',
+    examples JSON NULL,
+    output_preview JSON NULL,
+    source_code LONGTEXT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    isActive CHAR(1) NOT NULL DEFAULT 'Y',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    last_updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (tool_definition_id),
+    UNIQUE KEY uq_tool_source_external_name (source_id, external_name),
+    INDEX idx_tool_definitions_filters (connection_type, category, effect, status),
+    INDEX idx_tool_definitions_is_active (isActive),
+    CONSTRAINT fk_tool_definitions_source FOREIGN KEY (source_id) REFERENCES tool_sources(source_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_tool_bindings (
+    binding_id CHAR(36) NOT NULL,
+    agent_id CHAR(36) NOT NULL,
+    tool_definition_id CHAR(36) NOT NULL,
+    approval_policy VARCHAR(32) NOT NULL DEFAULT 'automatic',
+    allowed_scope JSON NULL,
+    defaults JSON NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    snapshot_version VARCHAR(100) NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    last_updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (binding_id),
+    UNIQUE KEY uq_agent_tool_binding (agent_id, tool_definition_id),
+    CONSTRAINT fk_agent_tool_bindings_agent FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE,
+    CONSTRAINT fk_agent_tool_bindings_tool FOREIGN KEY (tool_definition_id) REFERENCES tool_definitions(tool_definition_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS tool_executions (
+    execution_id CHAR(36) NOT NULL,
+    tool_definition_id CHAR(36) NOT NULL,
+    agent_id CHAR(36) NULL,
+    binding_id CHAR(36) NULL,
+    playground BOOLEAN NOT NULL DEFAULT TRUE,
+    input_payload JSON NOT NULL,
+    output_payload JSON NULL,
+    outcome VARCHAR(32) NOT NULL,
+    error_summary VARCHAR(1000) NULL,
+    duration_ms INT NOT NULL,
+    invoked_by VARCHAR(320) NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (execution_id),
+    INDEX idx_tool_executions_tool_created (tool_definition_id, created_at),
+    CONSTRAINT fk_tool_executions_tool FOREIGN KEY (tool_definition_id) REFERENCES tool_definitions(tool_definition_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

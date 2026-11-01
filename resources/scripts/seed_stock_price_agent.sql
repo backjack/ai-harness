@@ -1,9 +1,9 @@
 INSERT INTO agents (
-    agent_id, agent_name, description, workflow, owner_email, shared_with, model_id, tooling, system_prompts,
+    agent_id, agent_name, description, faq, owner_email, shared_with, model_id, tooling, system_prompts,
     user_prompts, model_type, guardrails, created_by
 ) VALUES (
     '00000000-0000-0000-0000-000000000002',
-    'Stock Price Assistant', 'Provides market-price and portfolio analysis.', 'Use live market data to answer portfolio questions.', 'owner@example.com', JSON_ARRAY(), 'gpt-5.4-mini',
+    'Stock Price Assistant', 'Provides market-price and portfolio analysis.', JSON_OBJECT(), 'owner@example.com', JSON_ARRAY(), 'gpt-5.4-mini',
     JSON_ARRAY(JSON_OBJECT(
         'name', 'getMarketPrice',
         'description', 'This tool is used for providing live market-price details for a stock ticker.',

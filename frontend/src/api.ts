@@ -1,6 +1,32 @@
-import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, ChatEvent, ConversationDetail, ConversationSummary } from "./types";
+import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, ChatEvent, ConversationDetail, ConversationSummary, ToolDefinition, ToolSource, ToolTestResult } from "./types";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
+
+async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${baseUrl}${path}`, init);
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(error?.detail ?? `Request failed (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function apiNoContent(path: string, init: RequestInit): Promise<void> {
+  const response = await fetch(`${baseUrl}${path}`, init);
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(error?.detail ?? `Request failed (${response.status})`);
+  }
+}
+
+export const getToolSources = () => apiJson<ToolSource[]>("/tool-sources");
+export const getTools = (query = "") => apiJson<ToolDefinition[]>(`/tools${query ? `?${query}` : ""}`);
+export const registerMcpSource = (body: { name: string; description?: string; endpoint: string; owner_email: string }) => apiJson<ToolSource & { test: unknown }>("/tool-sources/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const testToolSource = (sourceId: string) => apiJson<{ status: string; tool_count: number; error: string | null; duration_ms: number }>(`/tool-sources/${encodeURIComponent(sourceId)}/test`, { method: "POST" });
+export const createCustomTool = (body: Record<string, unknown>) => apiJson<ToolDefinition>("/tools/custom", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const testLibraryTool = (toolId: string, arguments_: Record<string, unknown>, invokedBy: string) => apiJson<ToolTestResult>(`/tools/${encodeURIComponent(toolId)}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ arguments: arguments_, invoked_by: invokedBy }) });
+export const deleteToolSource = (sourceId: string) => apiNoContent(`/tool-sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" });
+export const deleteLibraryTool = (toolId: string) => apiNoContent(`/tools/${encodeURIComponent(toolId)}`, { method: "DELETE" });
 
 export async function getAgents(): Promise<Agent[]> {
   const response = await fetch(`${baseUrl}/agents`);
@@ -33,6 +59,8 @@ export async function updateAgent(agentId: string, body: AgentUpdate): Promise<A
   }
   return response.json() as Promise<Agent>;
 }
+
+export const deleteAgent = (agentId: string) => apiNoContent(`/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" });
 
 export async function getAnalytics(): Promise<AnalyticsReport> {
   const response = await fetch(`${baseUrl}/analytics`);

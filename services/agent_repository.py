@@ -14,12 +14,13 @@ from services.tool_runtime import ToolFunctionValidationError, validate_tool_def
 
 logger = logging.getLogger("ai_harness.agent_repository")
 
-JSON_COLUMNS = {"shared_with", "tooling", "system_prompts", "user_prompts", "guardrails"}
-TOOL_REQUIRED_STRING_FIELDS = ("name", "description", "source_code")
+JSON_COLUMNS = {"shared_with", "tooling", "system_prompts", "user_prompts", "guardrails", "faq"}
+TOOL_REQUIRED_STRING_FIELDS = ("name", "description")
 AGENT_COLUMNS = {
     "agent_name",
     "description",
-    "workflow",
+    "initiative_id",
+    "faq",
     "owner_email",
     "shared_with",
     "model_id",
@@ -50,6 +51,9 @@ def _decode_agent(row: dict[str, Any] | None) -> dict[str, Any] | None:
                 else:
                     raise
     row["tooling"] = _normalize_tooling(row.get("tooling"), row.get("agent_id"))
+    row["faq"] = _normalize_faq(row.get("faq"), row.get("agent_id"))
+    if row.get("description") is None:
+        row["description"] = ""
     return row
 
 
@@ -74,6 +78,11 @@ def _normalize_tooling(value: Any, agent_id: Any) -> list[dict[str, Any]]:
             continue
         normalized = dict(item)
         normalized["enabled"] = enabled
+        normalized.setdefault("connection_type", "custom_langchain")
+        normalized.setdefault("source_code", "")
+        if normalized["connection_type"] != "mcp" and not normalized["source_code"].strip():
+            invalid_entries += 1
+            continue
         tools.append(normalized)
 
     if invalid_entries:
@@ -85,9 +94,31 @@ def _normalize_tooling(value: Any, agent_id: Any) -> list[dict[str, Any]]:
     return tools
 
 
+def _normalize_faq(value: Any, agent_id: Any) -> dict[str, str]:
+    """Return a persisted FAQ that satisfies the public question-answer schema."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        logger.warning("Ignoring non-object persisted FAQ agent_id=%s", agent_id)
+        return {}
+
+    faq = {
+        question: answer
+        for question, answer in value.items()
+        if isinstance(question, str) and isinstance(answer, str)
+    }
+    if len(faq) != len(value):
+        logger.warning("Ignoring invalid persisted FAQ entries agent_id=%s", agent_id)
+    return faq
+
+
 def _serialize_agent_values(values: dict[str, Any]) -> dict[str, Any]:
     return {
-        key: json.dumps(value) if key in JSON_COLUMNS else value
+        key: (
+            None
+            if key == "faq" and value is None
+            else json.dumps(value) if key in JSON_COLUMNS else value
+        )
         for key, value in values.items()
     }
 
@@ -105,6 +136,7 @@ def create_agent(values: dict[str, Any]) -> dict[str, Any]:
         with closing(get_connection_pool().get_connection()) as connection:
             with closing(connection.cursor()) as cursor:
                 cursor.execute(query, [agent_id, *serialized.values()])
+                _sync_agent_tool_bindings(cursor, agent_id, values.get("tooling", []))
             connection.commit()
     except Error as exc:
         logger.exception("Agent creation failed")
@@ -118,7 +150,7 @@ def get_agent(agent_id: str) -> dict[str, Any] | None:
     try:
         with closing(get_connection_pool().get_connection()) as connection:
             with closing(connection.cursor(dictionary=True)) as cursor:
-                cursor.execute("SELECT * FROM agents WHERE agent_id = %s", (agent_id,))
+                cursor.execute("SELECT * FROM agents WHERE agent_id = %s AND isActive = 'Y'", (agent_id,))
                 return _decode_agent(cursor.fetchone())
     except Error as exc:
         logger.exception("Agent lookup failed")
@@ -130,7 +162,7 @@ def list_agents() -> list[dict[str, Any]]:
     try:
         with closing(get_connection_pool().get_connection()) as connection:
             with closing(connection.cursor(dictionary=True)) as cursor:
-                cursor.execute("SELECT * FROM agents ORDER BY last_updated_at DESC")
+                cursor.execute("SELECT * FROM agents WHERE isActive = 'Y' ORDER BY last_updated_at DESC")
                 return [_decode_agent(row) or {} for row in cursor.fetchall()]
     except Error as exc:
         logger.exception("Agent list lookup failed")
@@ -154,12 +186,47 @@ def update_agent(agent_id: str, values: dict[str, Any]) -> dict[str, Any] | None
                     [*serialized.values(), agent_id],
                 )
                 updated = cursor.rowcount
+                if "tooling" in values:
+                    _sync_agent_tool_bindings(cursor, agent_id, values["tooling"])
             connection.commit()
     except Error as exc:
         logger.exception("Agent update failed")
         raise DatabaseUnavailableError("Agent update failed") from exc
 
     return get_agent(agent_id) if updated else None
+
+
+def deactivate_agent(agent_id: str) -> bool:
+    """Soft-delete an active agent while retaining its history."""
+    try:
+        with closing(get_connection_pool().get_connection()) as connection:
+            with closing(connection.cursor()) as cursor:
+                cursor.execute(
+                    "UPDATE agents SET isActive = 'N' WHERE agent_id = %s AND isActive = 'Y'",
+                    (agent_id,),
+                )
+                deactivated = cursor.rowcount > 0
+            connection.commit()
+        return deactivated
+    except Error as exc:
+        logger.exception("Agent deactivation failed")
+        raise DatabaseUnavailableError("Agent deactivation failed") from exc
+
+
+def _sync_agent_tool_bindings(cursor: Any, agent_id: str, tooling: list[dict[str, Any]]) -> None:
+    """Mirror library snapshots into the normalized binding table."""
+    cursor.execute("DELETE FROM agent_tool_bindings WHERE agent_id = %s", (agent_id,))
+    for tool in tooling:
+        tool_definition_id = tool.get("tool_definition_id")
+        if not tool_definition_id:
+            continue
+        cursor.execute(
+            "INSERT INTO agent_tool_bindings (binding_id,agent_id,tool_definition_id,approval_policy,allowed_scope,defaults,enabled,snapshot_version) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (str(uuid4()), agent_id, tool_definition_id, tool.get("approval_policy", "automatic"),
+             json.dumps(tool.get("allowed_scope") or {}), json.dumps(tool.get("defaults") or {}),
+             bool(tool.get("enabled", True)), tool.get("version")),
+        )
 
 
 def get_session_history(

@@ -28,5 +28,18 @@ class ChatEventSink:
 
     def __call__(self, event: dict[str, Any]) -> None:
         """Accept a complete LangChain trace record."""
-        event_type = str(event.pop("event", "langchain.event"))
-        self.emit(event_type, payload=event)
+        payload = dict(event)
+        event_type = str(payload.pop("event", "langchain.event"))
+        promoted = {
+            key: payload[key]
+            for key in ("tool_name", "tool_call_id", "arguments", "result", "duration_ms", "error", "error_type")
+            if key in payload
+        }
+        serialized = payload.get("serialized")
+        if "tool_name" not in promoted and isinstance(serialized, dict) and isinstance(serialized.get("name"), str):
+            promoted["tool_name"] = serialized["name"]
+        if event_type == "langchain.tool.start" and "arguments" not in promoted and "input" in payload:
+            promoted["arguments"] = payload["input"]
+        if event_type == "langchain.tool.end" and "result" not in promoted and "output" in payload:
+            promoted["result"] = payload["output"]
+        self.emit(event_type, **promoted, payload=payload)

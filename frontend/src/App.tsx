@@ -2,11 +2,12 @@ import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useS
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { matchPath, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { createAgent, getAgents, getAnalytics, getConversation, getConversations, streamChat, updateAgent } from "./api";
-import type { Agent, AgentCreate, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, UserProfile } from "./types";
+import { createAgent, createCustomTool, deleteAgent, deleteLibraryTool, deleteToolSource, getAgents, getAnalytics, getConversation, getConversations, getTools, getToolSources, registerMcpSource, streamChat, testLibraryTool, testToolSource, updateAgent } from "./api";
+import type { Agent, AgentCreate, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, ToolDefinition, ToolEffect, ToolSource, ToolTestResult, UserProfile } from "./types";
 
 const USER_PROFILE: UserProfile = { name: "Neeraj Sharma", emailId: "neerajs28288@gmail.com" };
 
@@ -22,6 +23,12 @@ function ChartView({ content }: { content: unknown }) {
   return <figure className="chart-view"><HighchartsReact highcharts={Highcharts} options={content.options as Highcharts.Options} /></figure>;
 }
 
+function AvailabilityDot({ status }: { status: string }) {
+  const available = status === "available";
+  const label = available ? "Available" : status === "unavailable" ? "Unavailable" : "Error";
+  return <span className={`availability-dot ${available ? "available" : "error"}`} role="img" aria-label={label} title={label} />;
+}
+
 function MessageContent({ message }: { message: ChatMessage }) {
   if (message.type === "json" || message.type === "tool") return <pre className="json-view">{JSON.stringify(message.content, null, 2)}</pre>;
   if (message.type === "chart") return <ChartView content={message.content} />;
@@ -33,8 +40,9 @@ function responseText(message: ChatMessage) {
   return typeof message.content === "string" ? message.content : JSON.stringify(message.content, null, 2);
 }
 
-function MessageActions({ message }: { message: ChatMessage }) {
+function MessageActions({ message, executionEvents, executionAgentName, executionStatus }: { message: ChatMessage; executionEvents?: ChatEvent[]; executionAgentName?: string; executionStatus?: "completed" | "failed" }) {
   const [status, setStatus] = useState("");
+  const [showSteps, setShowSteps] = useState(false);
 
   async function copy(value: string, success: string) {
     try {
@@ -46,16 +54,40 @@ function MessageActions({ message }: { message: ChatMessage }) {
     window.setTimeout(() => setStatus(""), 1800);
   }
 
-  return <div className="message-actions">
+  return <><div className="message-actions">
     <button type="button" onClick={() => void copy(responseText(message), "Copied")}>Copy</button>
     <button type="button" onClick={() => void copy(window.location.href, "Link copied")}>Share</button>
+    {executionEvents?.length ? <button type="button" aria-expanded={showSteps} onClick={() => setShowSteps((visible) => !visible)}>{showSteps ? "Hide steps" : "Show steps"}</button> : null}
     <span aria-live="polite">{status}</span>
-  </div>;
+  </div>{showSteps && executionEvents?.length ? <ExecutionTrace events={executionEvents} agentName={executionAgentName ?? "Agent"} status={executionStatus ?? "completed"} /> : null}</>;
 }
 
 function MarkdownPromptEditor({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder: string }) {
   const [preview, setPreview] = useState(false);
-  return <section className="markdown-editor"><div className="editor-heading"><strong>{label}</strong><div role="group" aria-label={`${label} mode`}><button type="button" className={!preview ? "active" : ""} onClick={() => setPreview(false)}>Edit</button><button type="button" className={preview ? "active" : ""} onClick={() => setPreview(true)}>Preview</button></div></div>{preview ? <div className="markdown-preview">{value.trim() ? <ReactMarkdown>{value}</ReactMarkdown> : <p>Nothing to preview.</p>}</div> : <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={7} placeholder={placeholder} />}</section>;
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  function replaceSelection(before: string, after: string, fallback: string) {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? value.length;
+    const end = textarea?.selectionEnd ?? value.length;
+    const selected = value.slice(start, end) || fallback;
+    const nextValue = `${value.slice(0, start)}${before}${selected}${after}${value.slice(end)}`;
+    onChange(nextValue);
+    requestAnimationFrame(() => { textareaRef.current?.focus(); textareaRef.current?.setSelectionRange(start + before.length, start + before.length + selected.length); });
+  }
+
+  function prefixLines(prefix: string) {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? value.length;
+    const end = textarea?.selectionEnd ?? value.length;
+    const lineStart = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+    const selected = value.slice(lineStart, end) || "List item";
+    const formatted = selected.split("\n").map((line) => `${prefix}${line}`).join("\n");
+    onChange(`${value.slice(0, lineStart)}${formatted}${value.slice(end)}`);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  return <section className="markdown-editor"><div className="editor-heading"><strong>{label}</strong><div role="group" aria-label={`${label} mode`}><button type="button" className={!preview ? "active" : ""} onClick={() => setPreview(false)}>Edit</button><button type="button" className={preview ? "active" : ""} onClick={() => setPreview(true)}>Preview</button></div></div>{preview ? <div className="markdown-preview">{value.trim() ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown> : <p>Nothing to preview.</p>}</div> : <><div className="markdown-toolbar" role="toolbar" aria-label={`${label} formatting`}><button type="button" title="Heading" onClick={() => prefixLines("## ")}>H</button><button type="button" title="Bold" onClick={() => replaceSelection("**", "**", "bold text")}><strong>B</strong></button><button type="button" title="Italic" onClick={() => replaceSelection("_", "_", "italic text")}><em>I</em></button><button type="button" title="Bulleted list" onClick={() => prefixLines("- ")}>• List</button><button type="button" title="Numbered list" onClick={() => prefixLines("1. ")}>1. List</button><button type="button" title="Task list" onClick={() => prefixLines("- [ ] ")}>☐ Task</button><button type="button" title="Link" onClick={() => replaceSelection("[", "](https://example.com)", "link text")}>Link</button><button type="button" title="Inline code" onClick={() => replaceSelection("`", "`", "code")}>Code</button><button type="button" title="Code block" onClick={() => replaceSelection("```\n", "\n```", "code")}>Block</button></div><textarea ref={textareaRef} value={value} onChange={(event) => onChange(event.target.value)} rows={9} placeholder={placeholder} /></>}</section>;
 }
 
 function PythonEditor({ value, onChange, label = "Python source" }: { value: string; onChange: (value: string) => void; label?: string }) {
@@ -91,13 +123,35 @@ function formatMessageTime(value?: string) {
   return `${datePart} · ${timePart}`;
 }
 
-function taskLabel(event: ChatEvent) {
-  if (event.type === "agent.lookup.start") return "Loading Stock Portfolio Analyst";
-  if (event.type === "session.initialized") return "Preparing conversation";
-  if (event.type.includes("tool")) return `Retrieving market data${event.tool_name ? ` with ${String(event.tool_name)}` : ""}`;
-  if (event.type.includes("model") || event.type === "agent.execution.start") return "Analyzing your request";
-  if (event.type.includes("audit")) return "Saving conversation";
+function executionEventStatus(event: ChatEvent) {
+  if (event.type.includes("error") || event.type.includes("unavailable")) return "error";
+  if (event.type === "final" || event.type === "complete" || event.type.includes(".end") || event.type.includes("success")) return "success";
+  return "running";
+}
+
+function executionToolName(event: ChatEvent) {
+  if (typeof event.tool_name === "string") return event.tool_name;
+  const payload = event.payload;
+  if (payload && typeof payload.tool_name === "string") return payload.tool_name;
+  const serialized = payload?.serialized;
+  if (serialized && typeof serialized === "object" && "name" in serialized && typeof serialized.name === "string") return serialized.name;
   return null;
+}
+
+function ExecutionTrace({ events, agentName, status, onClose }: { events: ChatEvent[]; agentName: string; status: "running" | "completed" | "failed"; onClose?: () => void }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (status === "running") listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, [events, status]);
+  return <section className="execution-trace" aria-live={status === "running" ? "polite" : "off"}><header><div><strong>{agentName} execution</strong><span>{events.length} events · {status}</span></div><span className="execution-header-actions"><i className={`execution-pulse ${status}`} aria-label={status} />{onClose ? <button type="button" className="execution-close" onClick={onClose} aria-label="Close execution steps" title="Close execution steps">×</button> : null}</span></header><div className="execution-events" ref={listRef}>{events.map((event, index) => { const eventStatus = executionEventStatus(event); const toolName = executionToolName(event); return <details className={`execution-event ${eventStatus}`} key={`${String(event.event_id ?? index)}-${event.type}`}><summary><i /><code>{event.type}{toolName ? ` · ${toolName}` : ""}</code><span>#{String(event.event_id ?? index + 1)}</span><time>{event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "Now"}</time></summary><pre>{JSON.stringify(event, null, 2)}</pre></details>; })}</div></section>;
+}
+
+function LiveExecutionTrace({ events, agentName, status }: { events: ChatEvent[]; agentName: string; status: "running" | "completed" | "failed" }) {
+  const [visible, setVisible] = useState(true);
+  if (!visible) return <button type="button" className="execution-reopen" onClick={() => setVisible(true)} aria-label={`Show ${events.length} execution events`}><i className={`execution-pulse ${status}`} aria-hidden="true" /><span>Show steps</span><small>{events.length} events</small></button>;
+  return <ExecutionTrace events={events} agentName={agentName} status={status} onClose={() => setVisible(false)} />;
+}
+
+function agentInitials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AI";
 }
 
 type ModelOption = { id: string; type: Agent["model_type"]; label: string; available: boolean };
@@ -182,6 +236,101 @@ function Marketplace() {
   </section>;
 }
 
+function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpdated: (agent: Agent) => void }) {
+  const [tab, setTab] = useState<"apps" | "connections" | "tools" | "playground">("connections");
+  const [sources, setSources] = useState<ToolSource[]>([]);
+  const [selectedSourceId, setSelectedSourceId] = useState("");
+  const [tools, setTools] = useState<ToolDefinition[]>([]);
+  const [search, setSearch] = useState("");
+  const [connection, setConnection] = useState("");
+  const [effect, setEffect] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [dialog, setDialog] = useState<"mcp" | "custom" | null>(null);
+  const [selected, setSelected] = useState<ToolDefinition | null>(null);
+  const [testInput, setTestInput] = useState("{}");
+  const [testResult, setTestResult] = useState<ToolTestResult | null>(null);
+  const [targetAgentId, setTargetAgentId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [mcpForm, setMcpForm] = useState({ name: "", description: "", endpoint: "" });
+  const [customForm, setCustomForm] = useState({ name: "", display_name: "", description: "", category: "Other", effect: "unknown" as ToolEffect, source_code: "" });
+
+  const load = async () => {
+    setError("");
+    try { const [nextSources, nextTools] = await Promise.all([getToolSources(), getTools()]); setSources(nextSources); setTools(nextTools); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load the tool library"); }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const visibleTools = tools.filter((tool) => {
+    const query = search.trim().toLowerCase();
+    return (!query || [tool.display_name, tool.description, tool.source_name, tool.category].some((value) => value.toLowerCase().includes(query)))
+      && (!connection || tool.connection_type === connection) && (!effect || tool.effect === effect) && (!statusFilter || tool.status === statusFilter);
+  });
+
+  async function submitMcp(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setError("");
+    try { await registerMcpSource({ ...mcpForm, owner_email: USER_PROFILE.emailId }); setDialog(null); setMcpForm({ name: "", description: "", endpoint: "" }); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not register MCP server"); }
+    finally { setBusy(false); }
+  }
+  async function submitCustom(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setError("");
+    try { await createCustomTool({ ...customForm, owner_email: USER_PROFILE.emailId }); setDialog(null); setCustomForm({ name: "", display_name: "", description: "", category: "Other", effect: "unknown", source_code: "" }); await load(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not create custom tool"); }
+    finally { setBusy(false); }
+  }
+  async function refreshSource(sourceId: string) {
+    setBusy(true); setError(""); try { await testToolSource(sourceId); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Connection test failed"); } finally { setBusy(false); }
+  }
+  async function removeSource(source: ToolSource) {
+    if (!window.confirm(`Delete MCP server "${source.name}" and deactivate all of its tools?`)) return;
+    setBusy(true); setError("");
+    try { await deleteToolSource(source.source_id); setSources((items) => items.filter((item) => item.source_id !== source.source_id)); setTools((items) => items.filter((item) => item.source_id !== source.source_id)); if (selectedSourceId === source.source_id) setSelectedSourceId(""); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not delete MCP server"); }
+    finally { setBusy(false); }
+  }
+  async function removeTool(tool: ToolDefinition) {
+    if (!window.confirm(`Delete tool "${tool.display_name}"?`)) return;
+    setBusy(true); setError("");
+    try { await deleteLibraryTool(tool.tool_definition_id); setTools((items) => items.filter((item) => item.tool_definition_id !== tool.tool_definition_id)); setSelected(null); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not delete tool"); }
+    finally { setBusy(false); }
+  }
+  async function runTest(event: FormEvent) {
+    event.preventDefault(); if (!selected) return; setBusy(true); setError(""); setTestResult(null);
+    try { const args = JSON.parse(testInput) as Record<string, unknown>; setTestResult(await testLibraryTool(selected.tool_definition_id, args, USER_PROFILE.emailId)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Tool test failed"); }
+    finally { setBusy(false); }
+  }
+  async function addToAgent() {
+    const agent = agents.find((item) => item.agent_id === targetAgentId);
+    if (!agent || !selected) return;
+    if (agent.tooling.some((item) => item.tool_definition_id === selected.tool_definition_id)) { setError("This tool is already attached to that agent."); return; }
+    const snapshot: AgentTool = {
+      name: selected.external_name, description: selected.description, source_code: selected.source_code ?? "", enabled: true,
+      connection_type: selected.connection_type, tool_definition_id: selected.tool_definition_id, source_id: selected.source_id,
+      version: selected.version, category: selected.category, effect: selected.effect, effect_source: selected.effect_source,
+      input_schema: selected.input_schema, approval_policy: "automatic", allowed_scope: {}, defaults: {},
+    };
+    setBusy(true); setError("");
+    try { const updated = await updateAgent(agent.agent_id, { tooling: [...agent.tooling, snapshot] }); onUpdated(updated); setSelected(null); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not add tool to agent"); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="content-page marketplace-page"><header className="content-page-header"><div><p className="eyebrow">TOOL LIBRARY</p><h1>Marketplace</h1><p>Register sources, discover tools, and test them before adding snapshots to agents.</p></div><div className="agent-header-actions">{tab === "connections" && <button className="primary-button" onClick={() => setDialog("mcp")}>Register MCP Server</button>}{tab === "tools" && <button className="primary-button" onClick={() => setDialog("custom")}>Create Python Tool</button>}</div></header>
+    <div className="marketplace-toolbar"><div className="marketplace-tabs" role="tablist">{([ ["apps","Apps"],["connections","MCP Servers"],["tools","Tool Library"],["playground","Test Playground"] ] as const).map(([id,label]) => <button type="button" role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)} key={id}>{label}</button>)}</div>{(tab === "tools" || tab === "playground") && <label className="catalog-search marketplace-search"><span className="sr-only">Search tools</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by business task" /></label>}</div>
+    {error && <div className="error-banner">{error}</div>}
+    {tab === "apps" && <div className="marketplace-grid">{MARKETPLACE_APPS.map((app) => <article className="marketplace-card app-card" key={app.name}><div className="marketplace-icon">{app.icon}</div><div><span className="marketplace-category">{app.category}</span><h2>{app.name}</h2><p>{app.description}</p></div></article>)}</div>}
+    {tab === "connections" && (() => { const mcpSources = sources.filter((source) => source.source_type === "mcp"); const selectedSource = mcpSources.find((source) => source.source_id === selectedSourceId); const selectedSourceTools = selectedSource ? tools.filter((tool) => tool.source_id === selectedSource.source_id) : []; return <div className="mcp-server-layout"><div className="mcp-server-grid">{mcpSources.map((source) => <article role="button" tabIndex={0} aria-pressed={selectedSourceId === source.source_id} className={`marketplace-card catalog-card connection-card ${selectedSourceId === source.source_id ? "selected" : ""}`} onClick={() => setSelectedSourceId(source.source_id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedSourceId(source.source_id); } }} key={source.source_id}><div className="marketplace-icon">MCP</div><div className="marketplace-card-content"><AvailabilityDot status={source.status} /><h2>{source.name}</h2><p>{source.description || "No description provided."}</p><code>{source.endpoint}</code><p>{source.tool_count} discovered tools</p><div className="card-actions"><button className="secondary-button" disabled={busy} onClick={(event) => { event.stopPropagation(); void refreshSource(source.source_id); }}>Test & refresh</button><button className="danger-button" disabled={busy} onClick={(event) => { event.stopPropagation(); void removeSource(source); }}>Delete</button></div></div></article>)}{mcpSources.length === 0 && <p className="catalog-empty">No MCP servers registered.</p>}</div><aside className="mcp-tools-panel" aria-live="polite">{selectedSource ? <><header><div><span className="marketplace-category">MCP TOOLS</span><h2>{selectedSource.name}</h2></div><span>{selectedSourceTools.length}</span></header>{selectedSourceTools.length ? <ul>{selectedSourceTools.map((tool) => <li key={tool.tool_definition_id}><span>{tool.display_name}</span><AvailabilityDot status={tool.status} /></li>)}</ul> : <p className="mcp-tools-empty">No tools discovered for this server.</p>}</> : <p className="mcp-tools-empty">Select an MCP server to view its tools.</p>}</aside></div>; })()}
+    {tab === "tools" && <><div className="tool-filters"><select value={connection} onChange={(event) => setConnection(event.target.value)}><option value="">All connections</option><option value="mcp">MCP</option><option value="custom_langchain">Custom · LangChain</option></select><select value={effect} onChange={(event) => setEffect(event.target.value)}><option value="">All effects</option>{["read","calculate","write","delete","unknown"].map((value) => <option key={value}>{value}</option>)}</select><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="available">Available</option><option value="unavailable">Unavailable</option></select></div><div className="marketplace-grid tool-library-grid">{visibleTools.map((tool) => { const sourceLabel = tool.connection_type === "mcp" ? tool.source_name : "Custom · LangChain"; return <button type="button" className="marketplace-card catalog-card tool-card-button" onClick={() => setSelected(tool)} key={tool.tool_definition_id}><div className="marketplace-icon">{tool.connection_type === "mcp" ? "MCP" : "PY"}</div><div className="marketplace-card-content"><span className="marketplace-category">{tool.connection_type === "mcp" ? "MCP" : "Custom · LangChain"} · {tool.category}</span><h2 className="tool-card-title" title={tool.display_name}>{tool.display_name}</h2><p className="tool-card-description" title={tool.description}>{tool.description}</p><div className="tool-card-footer"><span className="tool-source-tag" title={sourceLabel}>{sourceLabel}</span><div className="tool-badges"><span>{tool.effect}</span><AvailabilityDot status={tool.status} /></div></div></div></button>; })}{visibleTools.length === 0 && <p className="catalog-empty">No tools match these filters.</p>}</div></>}
+    {tab === "playground" && <div className="playground-layout"><aside className="playground-tools">{visibleTools.map((tool) => <button className={selected?.tool_definition_id === tool.tool_definition_id ? "active" : ""} onClick={() => { setSelected(tool); setTestResult(null); }} key={tool.tool_definition_id}>{tool.display_name}<small>{tool.connection_type}</small></button>)}</aside><form className="playground-panel" onSubmit={runTest}>{selected ? <><h2>{selected.display_name}</h2><p>{selected.description}</p><details><summary>Developer details</summary><pre>{JSON.stringify(selected.input_schema, null, 2)}</pre></details><label>Arguments JSON<textarea rows={10} value={testInput} onChange={(event) => setTestInput(event.target.value)} /></label><button className="primary-button" disabled={busy}>Test tool</button>{testResult && <div className={`test-result ${testResult.outcome}`}><strong>{testResult.outcome} · {testResult.duration_ms}ms</strong><pre>{JSON.stringify(testResult.output ?? testResult.error, null, 2)}</pre></div>}</> : <p>Select a tool to test.</p>}</form></div>}
+    {selected && tab === "tools" && <div className="marketplace-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}><section className="marketplace-dialog"><div className="agent-modal-header"><div><p className="eyebrow">{selected.connection_type === "mcp" ? "MCP" : "CUSTOM · LANGCHAIN"}</p><h1>{selected.display_name}</h1></div><button className="modal-close" onClick={() => setSelected(null)}>×</button></div><p>{selected.description}</p><dl className="tool-detail-list"><dt>Source</dt><dd>{selected.source_name}</dd><dt>Owner</dt><dd>{selected.owner_email}</dd><dt>Category</dt><dd>{selected.category}</dd><dt>Effect</dt><dd>{selected.effect} ({selected.effect_source})</dd></dl><details><summary>Developer details</summary><pre>{JSON.stringify(selected.input_schema, null, 2)}</pre></details><label className="tool-agent-select">Add to agent<select value={targetAgentId} onChange={(event) => setTargetAgentId(event.target.value)}><option value="">Select an agent</option>{agents.map((agent) => <option value={agent.agent_id} key={agent.agent_id}>{agent.agent_name}</option>)}</select></label><div className="marketplace-form-actions"><button className="danger-button" disabled={busy} onClick={() => void removeTool(selected)}>Delete</button><button className="secondary-button" onClick={() => { setTab("playground"); setTestResult(null); }}>Test tool</button><button className="primary-button" disabled={!targetAgentId || busy} onClick={() => void addToAgent()}>Add to agent</button></div></section></div>}
+    {dialog && <div className="marketplace-dialog-backdrop"><section className="marketplace-dialog"><div className="agent-modal-header"><h1>{dialog === "mcp" ? "Register MCP Server" : "Create Python Tool"}</h1><button className="modal-close" onClick={() => setDialog(null)}>×</button></div>{dialog === "mcp" ? <form className="marketplace-form" onSubmit={submitMcp}><label>Name<input required value={mcpForm.name} onChange={(e) => setMcpForm({...mcpForm,name:e.target.value})} /></label><label>Description<textarea value={mcpForm.description} onChange={(e) => setMcpForm({...mcpForm,description:e.target.value})} /></label><label>Streamable HTTP endpoint<input type="url" required value={mcpForm.endpoint} onChange={(e) => setMcpForm({...mcpForm,endpoint:e.target.value})} /></label><button className="primary-button" disabled={busy}>Register & discover</button></form> : <form className="marketplace-form" onSubmit={submitCustom}><label>Function name<input required value={customForm.name} onChange={(e) => setCustomForm({...customForm,name:e.target.value})} /></label><label>Display name<input value={customForm.display_name} onChange={(e) => setCustomForm({...customForm,display_name:e.target.value})} /></label><label>Description<textarea required value={customForm.description} onChange={(e) => setCustomForm({...customForm,description:e.target.value})} /></label><label>Category<input value={customForm.category} onChange={(e) => setCustomForm({...customForm,category:e.target.value})} /></label><label>Effect<select value={customForm.effect} onChange={(e) => setCustomForm({...customForm,effect:e.target.value as ToolEffect})}>{["read","calculate","write","delete","unknown"].map((value) => <option key={value}>{value}</option>)}</select></label><PythonEditor value={customForm.source_code} onChange={(source_code) => setCustomForm({...customForm,source_code})} /><button className="primary-button" disabled={busy}>Save custom tool</button></form>}</section></div>}
+  </section>;
+}
+
 function columnChart(title: string, categories: string[], series: Array<{ name: string; data: number[] }>, valueSuffix = ""): Highcharts.Options {
   return {
     chart: { type: "column", backgroundColor: "transparent" },
@@ -224,7 +373,7 @@ function AnalyticsDashboard() {
   return <section className="content-page"><header className="content-page-header"><div><p className="eyebrow">LAST {report.lookback_days} DAYS</p><h1>Analytics</h1><p>Model usage, agent activity, token consumption, and estimated OpenAI cost.</p></div><button className="secondary-button" onClick={load}>Refresh</button></header><div className="analytics-summary"><article><span>Interactions</span><strong>{formatNumber(report.summary.interaction_count)}</strong></article><article><span>Input tokens</span><strong>{formatNumber(report.summary.input_tokens)}</strong></article><article><span>Output tokens</span><strong>{formatNumber(report.summary.output_tokens)}</strong></article><article><span>Estimated cost</span><strong className={report.summary.cost_usd === null ? "cost-unavailable" : ""}>{costLabel}</strong></article></div>{report.by_model.some((row) => row.cost_usd === null) && <p className="analytics-note">Cost charts omit models without configured pricing; unavailable cost is not treated as zero.</p>}<div className="analytics-grid"><AnalyticsChart title="Cost by model" categories={pricedModels.map((row) => row.model_id)} series={[{ name: "Cost", data: pricedModels.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Cost by agent" categories={pricedAgents.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Cost", data: pricedAgents.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Token usage by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Input tokens", data: report.by_model.map((row) => row.input_tokens) }, { name: "Output tokens", data: report.by_model.map((row) => row.output_tokens) }]} /><AnalyticsChart title="Interactions by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Interactions", data: report.by_model.map((row) => row.interaction_count) }]} /><AnalyticsChart title="Interactions by agent" categories={report.by_agent.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Interactions", data: report.by_agent.map((row) => row.interaction_count) }]} /></div></section>;
 }
 
-function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCreated: (agent: Agent) => void; onUpdated: (agent: Agent) => void }) {
+function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Agent[]; onCreated: (agent: Agent) => void; onUpdated: (agent: Agent) => void; onDeleted: (agentId: string) => void }) {
   const [creating, setCreating] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [search, setSearch] = useState("");
@@ -234,10 +383,13 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
   const [modelId, setModelId] = useState(MODEL_OPTIONS[0].id);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [userPrompt, setUserPrompt] = useState("");
-  const [workflow, setWorkflow] = useState("");
+  const [initiativeId, setInitiativeId] = useState("");
   const [tools, setTools] = useState<AgentTool[]>([]);
+  const [libraryTools, setLibraryTools] = useState<ToolDefinition[]>([]);
+  const [selectedToolIndex, setSelectedToolIndex] = useState<number | null>(null);
   const [topics, setTopics] = useState("");
   const [fallback, setFallback] = useState("");
+  const [selectedGuardrail, setSelectedGuardrail] = useState<"topics" | "fallback">("topics");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -246,11 +398,23 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
   const availableModels = editingAgent && !MODEL_OPTIONS.some((model) => model.id === editingAgent.model_id)
     ? [...MODEL_OPTIONS, { id: editingAgent.model_id, type: editingAgent.model_type, label: `${editingAgent.model_id} (${editingAgent.model_type})`, available: true }]
     : MODEL_OPTIONS;
+
+  useEffect(() => { getTools().then(setLibraryTools).catch(() => setLibraryTools([])); }, []);
+
+  function addLibraryTool(tool: ToolDefinition) {
+    if (tools.some((item) => item.tool_definition_id === tool.tool_definition_id)) return;
+    setTools((items) => [...items, {
+      name: tool.external_name, description: tool.description, source_code: tool.source_code ?? "", enabled: true,
+      connection_type: tool.connection_type, tool_definition_id: tool.tool_definition_id, source_id: tool.source_id,
+      version: tool.version, category: tool.category, effect: tool.effect, effect_source: tool.effect_source,
+      input_schema: tool.input_schema, approval_policy: "automatic", allowed_scope: {}, defaults: {},
+    }]);
+  }
   const selectedModel = availableModels.find((model) => model.id === modelId && model.available) ?? availableModels.find((model) => model.available) ?? availableModels[0];
 
   function resetForm() {
-    setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setUserPrompt(""); setWorkflow("");
-    setTools([]); setTopics(""); setFallback(""); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
+    setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setUserPrompt(""); setInitiativeId("");
+    setTools([]); setSelectedToolIndex(null); setTopics(""); setFallback(""); setSelectedGuardrail("topics"); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
   }
 
   function openCreate() { resetForm(); setCreating(true); }
@@ -258,7 +422,7 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
     const guardrails = agent.guardrails ?? {};
     const allowedTopics = Array.isArray(guardrails.allowed_topics) ? guardrails.allowed_topics.filter((topic): topic is string => typeof topic === "string") : [];
     setEditingAgent(agent); setName(agent.agent_name); setDescription(agent.description); setModelId(agent.model_id);
-    setSystemPrompt(agent.system_prompts[0] ?? ""); setUserPrompt(agent.user_prompts?.[0] ?? ""); setWorkflow(agent.workflow); setTools(agent.tooling.map((tool) => ({ ...tool })));
+    setSystemPrompt(agent.system_prompts[0] ?? ""); setUserPrompt(agent.user_prompts?.[0] ?? ""); setInitiativeId(agent.initiative_id ?? ""); setTools(agent.tooling.map((tool) => ({ ...tool }))); setSelectedToolIndex(agent.tooling.length ? 0 : null);
     setTopics(allowedTopics.join(", ")); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
     setStep(1); setError(""); setCreating(true);
   }
@@ -299,14 +463,14 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
 
   function validationError(targetStep: number) {
     if (targetStep === 1 && (!name.trim() || !description.trim())) return "Name and description are required.";
-    if (targetStep === 3 && tools.some((tool) => !tool.name.trim() || !tool.description.trim() || !tool.source_code.trim())) return "Complete or remove each tool before continuing.";
+    if (targetStep === 3 && tools.some((tool) => !tool.name.trim() || !tool.description.trim() || (tool.connection_type !== "mcp" && !tool.source_code.trim()))) return "Complete or remove each tool before continuing.";
     return "";
   }
 
   function next() {
     const message = validationError(step);
     if (message) { setError(message); return; }
-    setError(""); setStep((value) => Math.min(5, value + 1));
+    setError(""); setStep((value) => Math.min(6, value + 1));
   }
 
   function goToStep(nextStep: number) {
@@ -315,6 +479,19 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
   }
   function updateTool(index: number, field: keyof AgentTool, value: string | boolean) {
     setTools((items) => items.map((tool, itemIndex) => itemIndex === index ? { ...tool, [field]: value } : tool));
+  }
+
+  function addTool() {
+    setTools((items) => { setSelectedToolIndex(items.length); return [...items, { name: "", description: "", source_code: "", enabled: true }]; });
+  }
+
+  function removeSelectedTool() {
+    if (selectedToolIndex === null) return;
+    setTools((items) => {
+      const next = items.filter((_, index) => index !== selectedToolIndex);
+      setSelectedToolIndex(next.length ? Math.min(selectedToolIndex, next.length - 1) : null);
+      return next;
+    });
   }
   async function save() {
     const detailsError = validationError(1);
@@ -327,7 +504,7 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
     if (allowedTopics.length) guardrails.allowed_topics = allowedTopics; else delete guardrails.allowed_topics;
     if (fallback.trim()) guardrails.out_of_scope_response = fallback.trim(); else delete guardrails.out_of_scope_response;
     const updatePayload: AgentUpdate = {
-      agent_name: name.trim(), description: description.trim(), workflow: workflow.trim(), model_id: selectedModel.id,
+      agent_name: name.trim(), description: description.trim(), initiative_id: initiativeId.trim() || null, model_id: selectedModel.id,
       model_type: selectedModel.type, system_prompts: systemPrompt.trim() ? [systemPrompt.trim()] : [], user_prompts: userPrompt.trim() ? [userPrompt.trim()] : [], tooling: tools, guardrails,
     };
     try {
@@ -343,17 +520,28 @@ function AgentManager({ agents, onCreated, onUpdated }: { agents: Agent[]; onCre
     finally { setSaving(false); }
   }
 
+  async function removeAgent(agent: Agent) {
+    if (!window.confirm(`Delete agent "${agent.agent_name}"?`)) return;
+    setSaving(true); setError("");
+    try { await deleteAgent(agent.agent_id); onDeleted(agent.agent_id); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not delete agent."); }
+    finally { setSaving(false); }
+  }
+
   const agentQuery = search.trim().toLocaleLowerCase();
   const visibleAgents = agents.filter((agent) => !agentQuery || [agent.agent_name, agent.description, agent.model_id].some((value) => value.toLocaleLowerCase().includes(agentQuery)))
     .sort((left, right) => left.agent_name.localeCompare(right.agent_name, undefined, { sensitivity: "base" }));
+  const selectedTool = selectedToolIndex === null ? undefined : tools[selectedToolIndex];
 
-  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><button type="button" className="text-button" onClick={() => openEdit(agent)}>Edit</button></div><p>{agent.description || "No description provided."}</p><small>{agent.model_id}</small></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>{["Details", "Prompts", "Tools", "Guardrails", "Review"].map((label, index) => <button type="button" className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} aria-current={step === index + 1 ? "step" : undefined} disabled={saving} onClick={() => goToStep(index + 1)} key={label}>{index + 1}. {label}</button>)}</div><div className="agent-wizard">
-    {step === 1 && <div className="wizard-fields"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><div className="model-picker" ref={modelPickerRef}><span className="model-picker-label">Model</span><button ref={modelTriggerRef} type="button" className="model-picker-trigger" aria-haspopup="listbox" aria-expanded={modelMenuOpen} onClick={() => { const opening = !modelMenuOpen; setModelMenuOpen(opening); if (opening) requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); }} onKeyDown={(event) => { if (event.key === "Escape") { setModelMenuOpen(false); return; } if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setModelMenuOpen(true); requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); } }}>{selectedModel.label}<span aria-hidden="true">⌄</span></button>{modelMenuOpen && <div className="model-picker-list" role="listbox" aria-label="Model" onKeyDown={handleModelListKey}>{availableModels.map((model) => <button type="button" role="option" aria-selected={model.available && modelId === model.id} key={model.id} disabled={!model.available} className={model.available ? "" : "unavailable"} onClick={() => { setModelId(model.id); setModelMenuOpen(false); modelTriggerRef.current?.focus(); }}><span>{model.label}</span>{!model.available && <small>Coming soon</small>}</button>)}</div>}</div><label>Workflow<textarea value={workflow} onChange={(event) => setWorkflow(event.target.value)} rows={4} placeholder="Describe the process this agent should follow" /></label></div>}
-    {step === 2 && <div className="wizard-fields"><MarkdownPromptEditor label="System prompt" value={systemPrompt} onChange={setSystemPrompt} placeholder="Write system instructions using Markdown" /><MarkdownPromptEditor label="User prompt" value={userPrompt} onChange={setUserPrompt} placeholder="Write a reusable user prompt using Markdown" /></div>}
-    {step === 3 && <div className="wizard-fields"><div className="field-heading"><div><h2>Tools</h2><p>Add trusted Python tools this agent can call.</p></div><button type="button" className="secondary-button" onClick={() => setTools((items) => [...items, { name: "", description: "", source_code: "", enabled: true }])}>Add tool</button></div>{tools.map((tool, index) => <div className="tool-editor" key={index}><button type="button" className="remove-button" onClick={() => setTools((items) => items.filter((_, itemIndex) => itemIndex !== index))}>Remove</button><label>Name<input value={tool.name} onChange={(event) => updateTool(index, "name", event.target.value)} /></label><label>Description<input value={tool.description} onChange={(event) => updateTool(index, "description", event.target.value)} /></label><PythonEditor value={tool.source_code} onChange={(value) => updateTool(index, "source_code", value)} /><label className="checkbox-label"><input type="checkbox" checked={tool.enabled} onChange={(event) => updateTool(index, "enabled", event.target.checked)} /> Enabled</label></div>)}</div>}
-    {step === 4 && <div className="wizard-fields guardrails-step"><div><h2>Guardrails</h2><p>Define which requests this agent should accept and how it handles out-of-scope questions.</p></div><label>Allowed topics<input value={topics} onChange={(event) => setTopics(event.target.value)} placeholder="finance, portfolio analysis" /></label><label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={4} /></label></div>}
-    {step === 5 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Workflow</dt><dd>{workflow || "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Allowed topics</dt><dd>{topics || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd></dl></div>}
-    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 5 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</button>}</div>
+  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><div className="card-actions"><button type="button" className="text-button" onClick={() => openEdit(agent)}>Edit</button><button type="button" className="danger-text-button" disabled={saving} onClick={() => void removeAgent(agent)}>Delete</button></div></div><p>{agent.description || "No description provided."}</p><small>{agent.model_id}</small></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>{["Details", "Prompts", "Tools", "Guardrails", "Sharing", "Review"].map((label, index) => <button type="button" className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} aria-current={step === index + 1 ? "step" : undefined} disabled={saving} onClick={() => goToStep(index + 1)} key={label}>{index + 1}. {label}</button>)}</div><div className="agent-wizard">
+    {step === 1 && <div className="wizard-fields compact-step"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><label>Initiative ID<input value={initiativeId} onChange={(event) => setInitiativeId(event.target.value)} placeholder="Optional initiative identifier" /></label><div className="model-picker" ref={modelPickerRef}><span className="model-picker-label">Model</span><button ref={modelTriggerRef} type="button" className="model-picker-trigger" aria-haspopup="listbox" aria-expanded={modelMenuOpen} onClick={() => { const opening = !modelMenuOpen; setModelMenuOpen(opening); if (opening) requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); }} onKeyDown={(event) => { if (event.key === "Escape") { setModelMenuOpen(false); return; } if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setModelMenuOpen(true); requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); } }}>{selectedModel.label}<span aria-hidden="true">⌄</span></button>{modelMenuOpen && <div className="model-picker-list" role="listbox" aria-label="Model" onKeyDown={handleModelListKey}>{availableModels.map((model) => <button type="button" role="option" aria-selected={model.available && modelId === model.id} key={model.id} disabled={!model.available} className={model.available ? "" : "unavailable"} onClick={() => { setModelId(model.id); setModelMenuOpen(false); modelTriggerRef.current?.focus(); }}><span>{model.label}</span>{!model.available && <small>Coming soon</small>}</button>)}</div>}</div></div>}
+    {step === 2 && <div className="wizard-fields compact-step"><MarkdownPromptEditor label="System prompt" value={systemPrompt} onChange={setSystemPrompt} placeholder="Write system instructions using Markdown" /><MarkdownPromptEditor label="User prompt" value={userPrompt} onChange={setUserPrompt} placeholder="Write a reusable user prompt using Markdown" /></div>}
+    {step === 3 && <section className="agent-library-picker"><div><h2>Tool Library</h2><p>Select individual tools. A snapshot is copied into this agent.</p></div><div>{libraryTools.filter((tool) => tool.status === "available").map((tool) => <button type="button" disabled={tools.some((item) => item.tool_definition_id === tool.tool_definition_id)} onClick={() => addLibraryTool(tool)} key={tool.tool_definition_id}><span>{tool.display_name}</span><small>{tool.connection_type === "mcp" ? "MCP" : "Custom · LangChain"} · {tool.effect}</small></button>)}</div></section>}
+    {step === 3 && <div className="master-detail"><aside className="master-list"><div className="master-list-heading"><div><h2>Agent tools</h2><p>Configure copied tools.</p></div><button type="button" className="secondary-button" onClick={addTool}>New inline tool</button></div>{tools.length ? tools.map((tool, index) => <button type="button" className={selectedToolIndex === index ? "active" : ""} aria-pressed={selectedToolIndex === index} onClick={() => setSelectedToolIndex(index)} key={index}><span>{tool.name.trim() || `Untitled tool ${index + 1}`}</span><small>{tool.connection_type === "mcp" ? "MCP · saved only" : tool.enabled ? "Enabled" : "Disabled"}</small></button>) : <p className="master-empty">No tools added.</p>}</aside><section className="detail-panel">{selectedTool && selectedToolIndex !== null ? <div className="tool-editor"><button type="button" className="remove-button" onClick={removeSelectedTool}>Remove tool</button><label>Name<input value={selectedTool.name} onChange={(event) => updateTool(selectedToolIndex, "name", event.target.value)} /></label><label>Description<input value={selectedTool.description} onChange={(event) => updateTool(selectedToolIndex, "description", event.target.value)} /></label>{selectedTool.connection_type !== "mcp" && <PythonEditor value={selectedTool.source_code} onChange={(value) => updateTool(selectedToolIndex, "source_code", value)} />}<label>Approval policy<select value={selectedTool.approval_policy ?? "automatic"} onChange={(event) => updateTool(selectedToolIndex, "approval_policy", event.target.value)}><option value="automatic">Automatic</option><option value="ask">Ask (stored; not executed in v1)</option><option value="disabled">Disabled</option></select></label><label className="checkbox-label"><input type="checkbox" checked={selectedTool.enabled} onChange={(event) => updateTool(selectedToolIndex, "enabled", event.target.checked)} /> Enabled</label></div> : <p className="detail-empty">Select a tool or add one from the library.</p>}</section></div>}
+    {step === 4 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to configure.</p></div></div><button type="button" className={selectedGuardrail === "topics" ? "active" : ""} aria-pressed={selectedGuardrail === "topics"} onClick={() => setSelectedGuardrail("topics")}>Allowed topics</button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}>Out-of-scope response</button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "topics" ? <label>Allowed topics<input value={topics} onChange={(event) => setTopics(event.target.value)} placeholder="finance, portfolio analysis" /><small>Separate multiple topics with commas.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={7} placeholder="Response shown when a request is outside the allowed topics" /></label>}</section></div>}
+    {step === 5 && <div className="wizard-fields compact-step sharing-step"><div><h2>Sharing</h2><p>Agent sharing will be available in a future release.</p></div><label>Email ID<input type="email" disabled placeholder="person@example.com" /></label><span className="coming-soon-note">Coming soon — sharing is currently disabled.</span></div>}
+    {step === 6 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Initiative ID</dt><dd>{initiativeId || "None"}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Allowed topics</dt><dd>{topics || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd><dt>Sharing</dt><dd>Disabled</dd></dl></div>}
+    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 6 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</button>}</div>
   </div></section></div>}</div>;
 }
 
@@ -371,8 +559,6 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [error, setError] = useState("");
-  const [tasks, setTasks] = useState<string[]>([]);
-  const [tasksCompleting, setTasksCompleting] = useState(false);
   const [conversationsLoading, setConversationsLoading] = useState(true);
   const [conversationLoadingId, setConversationLoadingId] = useState<string>();
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
@@ -442,7 +628,7 @@ export default function App() {
       top: chatBodyRef.current.scrollHeight,
       behavior: "smooth",
     }));
-  }, [activeId, conversations, tasks]);
+  }, [activeId, conversations]);
 
   function resizeTextarea(element = textareaRef.current) {
     if (!element) return;
@@ -500,30 +686,34 @@ export default function App() {
       agentId,
       title: item.sessionId || item.messages.length ? item.title : text.slice(0, 34),
       messages: [...item.messages, { role: "user", content: text, createdAt: new Date().toISOString() }],
+      executionEvents: [],
+      executionAgentName: agents.find((agent) => agent.agent_id === agentId)?.agent_name ?? "Agent",
+      executionStatus: "running",
     } : item));
     setPrompt("");
     setError("");
     setStreaming(true);
-    setTasksCompleting(false);
-    setTasks(["Preparing your analyst"]);
     let finalResult: ChatEvent["response"];
     try {
       await streamChat({ agent_id: agentId, user_id: USER_PROFILE.emailId, user_prompt: text, session_id: conversation.sessionId }, (event) => {
+        setConversations((items) => items.map((item) => item.id === conversationId ? {
+          ...item,
+          executionEvents: [...(item.executionEvents ?? []), event],
+          executionStatus: event.type === "error" ? "failed" : event.type === "complete" ? "completed" : item.executionStatus,
+        } : item));
         if (event.type === "final" && event.response) {
           finalResult = event.response;
-          setTasksCompleting(true);
           return;
         }
-        if (event.type === "error") { setError(String(event.detail ?? "The chat request failed.")); setTasks([]); setTasksCompleting(false); return; }
-        const label = taskLabel(event);
-        if (label) setTasks((items) => items.includes(label) ? items : [...items, label]);
+        if (event.type === "error") setError(String(event.detail ?? "The chat request failed."));
       });
       if (finalResult) {
         await new Promise<void>((resolve) => window.setTimeout(resolve, 450));
         const result = finalResult;
         setConversations((items) => items.map((item) => item.id === conversationId ? {
           ...item, agentId, sessionId: result.session_id, chatSequenceId: result.chat_sequence_id,
-          messages: [...item.messages, { role: "assistant", content: String(result.response.content), createdAt: new Date().toISOString(), response: result.response }],
+          executionEvents: undefined, executionAgentName: undefined, executionStatus: undefined,
+          messages: [...item.messages, { role: "assistant", content: String(result.response.content), createdAt: new Date().toISOString(), response: result.response, executionEvents: item.executionEvents ?? [], executionAgentName: item.executionAgentName, executionStatus: "completed" }],
         } : item));
         if (!conversation.sessionId) {
           if (routeDraftRef.current?.id === conversationId) routeDraftRef.current = null;
@@ -532,10 +722,9 @@ export default function App() {
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The chat request failed.");
+      setConversations((items) => items.map((item) => item.id === conversationId ? { ...item, executionStatus: "failed" } : item));
     } finally {
       setStreaming(false);
-      setTasks([]);
-      setTasksCompleting(false);
     }
   }
 
@@ -617,6 +806,12 @@ export default function App() {
     setAgents((items) => items.map((item) => item.agent_id === agent.agent_id ? agent : item));
   }
 
+  function agentDeleted(agentId: string) {
+    const remaining = agents.filter((agent) => agent.agent_id !== agentId);
+    setAgents(remaining);
+    if (selectedAgent === agentId) setSelectedAgent(remaining[0]?.agent_id ?? "");
+  }
+
   const conversationAgentName = agents.find((agent) => agent.agent_id === active?.agentId)?.agent_name ?? selectedAgentName;
   const activeConversationLoading = conversationLoadingId === active?.id;
   const activeHistoryPending = Boolean(active?.sessionId && !active.historyLoaded);
@@ -636,13 +831,13 @@ export default function App() {
     </aside>
     <section className={view === "chat" ? "workspace" : "workspace content-workspace"}>
       <Routes><Route path="/" element={<Navigate to="/chat" replace />} /><Route path="/chat" element={null} /><Route path="/conversations/:sessionId" element={null} /><Route path="/agents" element={null} /><Route path="/marketplace" element={null} /><Route path="/analytics" element={null} /><Route path="*" element={<Navigate to="/chat" replace />} /></Routes>
-      {view === "agents" ? <AgentManager agents={agents} onCreated={agentCreated} onUpdated={agentUpdated} /> : view === "marketplace" ? <Marketplace /> : view === "analytics" ? <AnalyticsDashboard /> : <>
+      {view === "agents" ? <AgentManager agents={agents} onCreated={agentCreated} onUpdated={agentUpdated} onDeleted={agentDeleted} /> : view === "marketplace" ? <ToolLibraryMarketplace agents={agents} onUpdated={agentUpdated} /> : view === "analytics" ? <AnalyticsDashboard /> : <>
       <header className="topbar"><span className="conversation-model" title={conversationModelId}>{conversationModelId}</span><span className="topbar-divider" aria-hidden="true" /><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
       <div ref={chatBodyRef} className={active?.messages.length || activeConversationLoading ? "chat-body transcript" : "chat-body welcome"}>
         {activeConversationLoading && <div className="transcript-loading" role="status" aria-label="Loading conversation"><span /><span /><span /><p>Loading conversation</p></div>}
         {!activeConversationLoading && !active?.messages.length && <div className="welcome-content"><p className="eyebrow">AI HARNESS</p><h1>Where should we start?</h1><p>Ask your configured AI agent anything.</p><div className="suggestions"><button onClick={() => setPrompt("Analyse my portfolio allocation")}>Analyse my portfolio allocation</button><button onClick={() => setPrompt("Get the latest price for AAPL")}>Get a current stock price</button><button onClick={() => setPrompt("Calculate my net worth with stock holdings")}>Calculate my net worth with stock holdings</button></div></div>}
-        {active?.messages.map((message, index) => <article key={`${message.role}-${index}`} className={`message ${message.role}`}><div className="message-card"><div className="message-meta">{message.role === "assistant" ? <><span className="agent-avatar" aria-hidden="true">SP</span><span className="agent-status" title="Available" aria-label="Available" /><span>{conversationAgentName}</span></> : <span className="user-avatar">You</span>}</div>{message.response ? <MessageContent message={message.response} /> : <div className="message-text">{message.content}</div>}<time className="message-time">{formatMessageTime(message.createdAt) ?? "Just now"}</time>{message.role === "assistant" && message.response && <MessageActions message={message.response} />}</div></article>)}
-        {tasks.length > 0 && <section className={tasksCompleting ? "task-list is-completing" : "task-list"} aria-live="polite"><span>Working</span>{tasks.map((task) => <div className="task-row" key={task}><i /><span>{task}</span></div>)}</section>}
+        {active?.messages.map((message, index) => <article key={`${message.role}-${index}`} className={`message ${message.role}`}><div className="message-card"><div className="message-meta">{message.role === "assistant" ? <><span className="agent-avatar" aria-hidden="true">{agentInitials(conversationAgentName)}</span><span className="agent-status" title="Available" aria-label="Available" /><span>{conversationAgentName}</span></> : <span className="user-avatar">You</span>}</div>{message.response ? <MessageContent message={message.response} /> : <div className="message-text">{message.content}</div>}<time className="message-time">{formatMessageTime(message.createdAt) ?? "Just now"}</time>{message.role === "assistant" && message.response && <MessageActions message={message.response} executionEvents={message.executionEvents} executionAgentName={message.executionAgentName} executionStatus={message.executionStatus} />}</div></article>)}
+        {(active?.executionEvents?.length ?? 0) > 0 && <LiveExecutionTrace events={active?.executionEvents ?? []} agentName={active?.executionAgentName ?? conversationAgentName} status={active?.executionStatus ?? "running"} />}
         {error && <div className="error-banner">{error}</div>}
       </div>
       <form className="composer-wrap" onSubmit={submit}><div className="composer"><div className="agent-picker-wrap"><button type="button" className="icon-button" aria-label="Choose agent" aria-expanded={agentPickerOpen} onClick={() => setAgentPickerOpen((open) => !open)}>+</button>{agentPickerOpen && <div className="agent-picker" role="listbox" aria-label="Choose an agent">{agents.map((agent) => <button type="button" key={agent.agent_id} className={agent.agent_id === selectedAgent ? "agent-option active" : "agent-option"} onClick={() => selectAgent(agent.agent_id)} role="option" aria-selected={agent.agent_id === selectedAgent}><span>{agent.agent_name}</span><small>{agent.model_id}</small></button>)}</div>}</div><span className="selected-agent" aria-live="polite" title={selectedAgentName}>{selectedAgentName}</span><textarea ref={textareaRef} value={prompt} onChange={(event) => updatePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(event); } }} placeholder={activeConversationLoading ? "Loading conversation..." : activeHistoryPending ? "Select the conversation again to retry" : selectedAgent ? `Ask ${selectedAgentName} anything...` : "Select an agent to begin"} disabled={!selectedAgent || streaming || activeHistoryPending} rows={1} /><button type="submit" className="send-button" aria-label="Send message" disabled={!prompt.trim() || !selectedAgent || streaming || activeHistoryPending}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-5 5m5-5 5 5" /></svg></button></div><p>AI Harness may make mistakes. Check important information.</p></form>

@@ -12,6 +12,7 @@ from controllers.analytics import router as analytics_router
 from controllers.agents import router as agents_router
 from controllers.conversations import router as conversations_router
 from controllers.service_status import router as service_status_router
+from controllers.tool_library import router as tool_library_router
 from utils.config import get_config
 from utils.logging_config import configure_logging
 
@@ -52,6 +53,7 @@ app.include_router(service_status_router, prefix="/api")
 app.include_router(agents_router, prefix="/api")
 app.include_router(analytics_router, prefix="/api")
 app.include_router(conversations_router, prefix="/api")
+app.include_router(tool_library_router, prefix="/api")
 
 if (frontend_dist.is_dir()):
     app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="frontend-assets")

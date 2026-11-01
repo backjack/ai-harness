@@ -95,6 +95,17 @@ with an inline `getMarketPrice` tool that calls Yahoo Finance's chart REST API.
 It accepts a ticker symbol such as `AAPL` and includes a
 delayed-price/not-financial-advice note.
 
+Before deploying agent initiative support against an existing database, run
+`resources/scripts/migrate_agents_add_initiative_id.sql`. The migration is
+idempotent and adds the nullable `initiative_id` column used by create and edit.
+
+For an existing database, apply the agent and tool-library scripts in this
+order: `migrate_agents_add_description_workflow.sql` (retained as a legacy
+filename; it now adds only `description`),
+`migrate_agents_add_initiative_id.sql`, `migrate_agents_add_faq.sql`, then
+`create_tool_library.sql`. The description and initiative migrations
+are safe to run again; the tool-library schema uses `CREATE TABLE IF NOT EXISTS`.
+
 ## Logging
 
 Diagnostics are written to the console. Set `LOG_LEVEL` to control application
