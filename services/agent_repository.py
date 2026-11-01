@@ -182,10 +182,15 @@ def update_agent(agent_id: str, values: dict[str, Any]) -> dict[str, Any] | None
         with closing(get_connection_pool().get_connection()) as connection:
             with closing(connection.cursor()) as cursor:
                 cursor.execute(
-                    f"UPDATE agents SET {assignments} WHERE agent_id = %s",
+                    "SELECT 1 FROM agents WHERE agent_id = %s AND isActive = 'Y' FOR UPDATE",
+                    (agent_id,),
+                )
+                if cursor.fetchone() is None:
+                    return None
+                cursor.execute(
+                    f"UPDATE agents SET {assignments} WHERE agent_id = %s AND isActive = 'Y'",
                     [*serialized.values(), agent_id],
                 )
-                updated = cursor.rowcount
                 if "tooling" in values:
                     _sync_agent_tool_bindings(cursor, agent_id, values["tooling"])
             connection.commit()
@@ -193,7 +198,7 @@ def update_agent(agent_id: str, values: dict[str, Any]) -> dict[str, Any] | None
         logger.exception("Agent update failed")
         raise DatabaseUnavailableError("Agent update failed") from exc
 
-    return get_agent(agent_id) if updated else None
+    return get_agent(agent_id)
 
 
 def deactivate_agent(agent_id: str) -> bool:

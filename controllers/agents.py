@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from utils.database import DatabaseUnavailableError
 from services.agent_repository import create_agent, deactivate_agent, get_agent, list_agents, update_agent
@@ -34,6 +34,47 @@ class AgentTool(BaseModel):
     defaults: dict[str, Any] = Field(default_factory=dict)
 
 
+class GuardrailsConfig(BaseModel):
+    """Validated policy configuration enforced for every agent turn."""
+
+    policy_text: str | None = Field(default=None, max_length=8000)
+    allowed_topics: list[str] = Field(default_factory=list, max_length=100)
+    blocked_topics: list[str] = Field(default_factory=list, max_length=100)
+    out_of_scope_response: str | None = Field(default=None, max_length=4000)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("policy_text", "out_of_scope_response")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("allowed_topics", "blocked_topics")
+    @classmethod
+    def normalize_topics(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            topic = value.strip()
+            key = topic.casefold()
+            if topic and key not in seen:
+                normalized.append(topic)
+                seen.add(key)
+        return normalized
+
+    @model_validator(mode="after")
+    def require_policy_for_response(self) -> "GuardrailsConfig":
+        has_policy = bool(self.policy_text or self.allowed_topics or self.blocked_topics)
+        if self.out_of_scope_response and not has_policy:
+            raise ValueError(
+                "out_of_scope_response requires policy_text, allowed_topics, or blocked_topics"
+            )
+        return self
+
+
 class AgentBase(BaseModel):
     agent_name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=4000)
@@ -47,7 +88,7 @@ class AgentBase(BaseModel):
     model_type: Literal["openai", "ollama"] = Field(
         description="Model provider. Use 'openai' or 'ollama'; put the model name in model_id."
     )
-    guardrails: dict[str, Any] = Field(default_factory=dict)
+    guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
 
 
 class AgentCreate(AgentBase):
@@ -91,7 +132,7 @@ class AgentUpdate(BaseModel):
     system_prompts: list[str] | None = None
     user_prompts: list[str] | None = None
     model_type: Literal["openai", "ollama"] | None = None
-    guardrails: dict[str, Any] | None = None
+    guardrails: GuardrailsConfig | None = None
 
 
 class AgentResponse(AgentBase):

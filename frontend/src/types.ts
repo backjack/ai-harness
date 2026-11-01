@@ -11,6 +11,13 @@ export type ToolSource = { source_id: string; source_type: "mcp" | "custom"; nam
 export type ToolDefinition = { tool_definition_id: string; source_id: string; external_name: string; display_name: string; description: string; connection_type: "mcp" | "custom_langchain"; input_schema: Record<string, unknown>; output_schema: Record<string, unknown> | null; version: string | null; category: string; effect: ToolEffect; effect_source: string; status: "available" | "unavailable"; examples: string[] | null; output_preview: unknown; source_code: string | null; enabled: boolean; source_name: string; owner_email: string; endpoint: string | null };
 export type ToolTestResult = { execution_id: string; outcome: "success" | "error"; output: unknown; error: string | null; duration_ms: number };
 
+export type AgentGuardrails = {
+  policy_text?: string | null;
+  allowed_topics?: string[];
+  blocked_topics?: string[];
+  out_of_scope_response?: string | null;
+};
+
 export type Agent = {
   agent_id: string;
   agent_name: string;
@@ -21,7 +28,7 @@ export type Agent = {
   tooling: AgentTool[];
   system_prompts: string[];
   user_prompts: string[];
-  guardrails: Record<string, unknown>;
+  guardrails: AgentGuardrails;
 };
 
 export type AgentCreate = Omit<Agent, "agent_id"> & { owner_email: string; created_by: string; shared_with: string[] };

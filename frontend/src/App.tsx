@@ -7,7 +7,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { matchPath, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { createAgent, createCustomTool, deleteAgent, deleteLibraryTool, deleteToolSource, getAgents, getAnalytics, getConversation, getConversations, getTools, getToolsForSource, getToolSources, registerMcpSource, streamChat, testLibraryTool, testToolSource, updateAgent, updateMcpSource } from "./api";
-import type { Agent, AgentCreate, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, ToolDefinition, ToolEffect, ToolSource, ToolTestResult, UserProfile } from "./types";
+import type { Agent, AgentCreate, AgentGuardrails, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, ToolDefinition, ToolEffect, ToolSource, ToolTestResult, UserProfile } from "./types";
 
 const USER_PROFILE: UserProfile = { name: "Neeraj Sharma", emailId: "neerajs28288@gmail.com" };
 
@@ -530,8 +530,9 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   const [libraryTools, setLibraryTools] = useState<ToolDefinition[]>([]);
   const [selectedToolIndex, setSelectedToolIndex] = useState<number | null>(null);
   const [policyText, setPolicyText] = useState("");
+  const [blockedTopics, setBlockedTopics] = useState("");
   const [fallback, setFallback] = useState("");
-  const [selectedGuardrail, setSelectedGuardrail] = useState<"topics" | "fallback">("topics");
+  const [selectedGuardrail, setSelectedGuardrail] = useState<"policy" | "blocked" | "fallback">("policy");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -556,17 +557,18 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
 
   function resetForm() {
     setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setUserPrompt(""); setInitiativeId("");
-    setTools([]); setSelectedToolIndex(null); setPolicyText(""); setFallback(""); setSelectedGuardrail("topics"); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
+    setTools([]); setSelectedToolIndex(null); setPolicyText(""); setBlockedTopics(""); setFallback(""); setSelectedGuardrail("policy"); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
   }
 
   function openCreate() { resetForm(); setCreating(true); }
   function openEdit(agent: Agent) {
     const guardrails = agent.guardrails ?? {};
     const allowedTopics = Array.isArray(guardrails.allowed_topics) ? guardrails.allowed_topics.filter((topic): topic is string => typeof topic === "string") : [];
+    const savedBlockedTopics = Array.isArray(guardrails.blocked_topics) ? guardrails.blocked_topics.filter((topic): topic is string => typeof topic === "string") : [];
     const legacyPolicy = allowedTopics.length ? `Only allow requests related to these topics: ${allowedTopics.join(", ")}.` : "";
     setEditingAgent(agent); setName(agent.agent_name); setDescription(agent.description); setModelId(agent.model_id);
     setSystemPrompt(agent.system_prompts[0] ?? ""); setUserPrompt(agent.user_prompts?.[0] ?? ""); setInitiativeId(agent.initiative_id ?? ""); setTools(agent.tooling.map((tool) => ({ ...tool }))); setSelectedToolIndex(agent.tooling.length ? 0 : null);
-    setPolicyText(typeof guardrails.policy_text === "string" ? guardrails.policy_text : legacyPolicy); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
+    setPolicyText(typeof guardrails.policy_text === "string" ? guardrails.policy_text : legacyPolicy); setBlockedTopics(savedBlockedTopics.join("\n")); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
     setStep(1); setError(""); setCreating(true);
   }
 
@@ -607,6 +609,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   function validationError(targetStep: number) {
     if (targetStep === 1 && (!name.trim() || !description.trim())) return "Name and description are required.";
     if (targetStep === 3 && tools.some((tool) => !tool.name.trim() || !tool.description.trim() || (tool.connection_type !== "mcp" && !tool.source_code.trim()))) return "Complete or remove each tool before continuing.";
+    if (targetStep === 4 && fallback.trim() && !policyText.trim() && !blockedTopics.trim()) return "Add a guardrail policy or blocked topic before configuring an out-of-scope response.";
     return "";
   }
 
@@ -641,10 +644,14 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
     if (detailsError) { setStep(1); setError(detailsError); return; }
     const toolsError = validationError(3);
     if (toolsError) { setStep(3); setError(toolsError); return; }
+    const guardrailsError = validationError(4);
+    if (guardrailsError) { setStep(4); setError(guardrailsError); return; }
     setSaving(true); setError("");
-    const guardrails: Record<string, unknown> = editingAgent ? { ...editingAgent.guardrails } : {};
+    const guardrails: AgentGuardrails = editingAgent ? { ...editingAgent.guardrails } : {};
     delete guardrails.allowed_topics;
+    const normalizedBlockedTopics = Array.from(new Set(blockedTopics.split(/[\n,]/).map((topic) => topic.trim()).filter(Boolean)));
     if (policyText.trim()) guardrails.policy_text = policyText.trim(); else delete guardrails.policy_text;
+    if (normalizedBlockedTopics.length) guardrails.blocked_topics = normalizedBlockedTopics; else delete guardrails.blocked_topics;
     if (fallback.trim()) guardrails.out_of_scope_response = fallback.trim(); else delete guardrails.out_of_scope_response;
     const updatePayload: AgentUpdate = {
       agent_name: name.trim(), description: description.trim(), initiative_id: initiativeId.trim() || null, model_id: selectedModel.id,
@@ -681,9 +688,9 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
     {step === 2 && <div className="wizard-fields compact-step"><MarkdownPromptEditor label="System prompt" value={systemPrompt} onChange={setSystemPrompt} placeholder="Write system instructions using Markdown" /><MarkdownPromptEditor label="User prompt" value={userPrompt} onChange={setUserPrompt} placeholder="Write a reusable user prompt using Markdown" /></div>}
     {step === 3 && <section className="agent-library-picker"><div><h2>Tool Library</h2><p>Select individual tools. A snapshot is copied into this agent.</p></div><div>{libraryTools.filter((tool) => tool.status === "available").map((tool) => <button type="button" disabled={tools.some((item) => item.tool_definition_id === tool.tool_definition_id)} onClick={() => addLibraryTool(tool)} key={tool.tool_definition_id}><span>{tool.display_name}</span><small>{tool.connection_type === "mcp" ? "MCP" : "Custom · LangChain"} · {tool.effect}</small></button>)}</div></section>}
     {step === 3 && <div className="master-detail"><aside className="master-list"><div className="master-list-heading"><div><h2>Agent tools</h2><p>Configure copied tools.</p></div><button type="button" className="secondary-button" onClick={addTool}>New inline tool</button></div>{tools.length ? tools.map((tool, index) => <button type="button" className={selectedToolIndex === index ? "active" : ""} aria-pressed={selectedToolIndex === index} onClick={() => setSelectedToolIndex(index)} key={index}><span>{tool.name.trim() || `Untitled tool ${index + 1}`}</span><small>{tool.connection_type === "mcp" ? "MCP · saved only" : tool.enabled ? "Enabled" : "Disabled"}</small></button>) : <p className="master-empty">No tools added.</p>}</aside><section className="detail-panel">{selectedTool && selectedToolIndex !== null ? <div className="tool-editor"><button type="button" className="remove-button" onClick={removeSelectedTool}>Remove tool</button><label>Name<input value={selectedTool.name} onChange={(event) => updateTool(selectedToolIndex, "name", event.target.value)} /></label><label>Description<input value={selectedTool.description} onChange={(event) => updateTool(selectedToolIndex, "description", event.target.value)} /></label>{selectedTool.connection_type !== "mcp" && <PythonEditor value={selectedTool.source_code} onChange={(value) => updateTool(selectedToolIndex, "source_code", value)} />}<label>Approval policy<select value={selectedTool.approval_policy ?? "automatic"} onChange={(event) => updateTool(selectedToolIndex, "approval_policy", event.target.value)}><option value="automatic">Automatic</option><option value="ask">Ask (stored; not executed in v1)</option><option value="disabled">Disabled</option></select></label><label className="checkbox-label"><input type="checkbox" checked={selectedTool.enabled} onChange={(event) => updateTool(selectedToolIndex, "enabled", event.target.checked)} /> Enabled</label></div> : <p className="detail-empty">Select a tool or add one from the library.</p>}</section></div>}
-    {step === 4 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to configure.</p></div></div><button type="button" className={selectedGuardrail === "topics" ? "active" : ""} aria-pressed={selectedGuardrail === "topics"} onClick={() => setSelectedGuardrail("topics")}>Guardrail policy</button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}>Out-of-scope response</button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "topics" ? <label>Guardrail policy<textarea value={policyText} onChange={(event) => setPolicyText(event.target.value)} rows={9} placeholder="Describe which requests this agent may handle and any restrictions it must enforce." /><small>The model evaluates every user message against this policy before tools or normal chat run.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={7} placeholder="Response returned when the guardrail blocks a request" /></label>}</section></div>}
+    {step === 4 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to configure.</p></div></div><button type="button" className={selectedGuardrail === "policy" ? "active" : ""} aria-pressed={selectedGuardrail === "policy"} onClick={() => setSelectedGuardrail("policy")}>Guardrail policy</button><button type="button" className={selectedGuardrail === "blocked" ? "active" : ""} aria-pressed={selectedGuardrail === "blocked"} onClick={() => setSelectedGuardrail("blocked")}>Blocked topics</button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}>Out-of-scope response</button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "policy" ? <label>Guardrail policy<textarea value={policyText} onChange={(event) => setPolicyText(event.target.value)} rows={9} placeholder="Describe which requests this agent may handle and any restrictions it must enforce." /><small>Every user message is checked against this policy before tools run. The policy is also applied to the final model response.</small></label> : selectedGuardrail === "blocked" ? <label>Blocked topics<textarea value={blockedTopics} onChange={(event) => setBlockedTopics(event.target.value)} rows={8} placeholder="Enter one topic per line" /><small>Requests related to any listed topic are blocked before normal chat or tools run.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={7} placeholder="Response returned when the guardrail blocks a request" /><small>This is the refusal shown after a block; it does not define what should be blocked.</small></label>}</section></div>}
     {step === 5 && <div className="wizard-fields compact-step sharing-step"><div><h2>Sharing</h2><p>Agent sharing will be available in a future release.</p></div><label>Email ID<input type="email" disabled placeholder="person@example.com" /></label><span className="coming-soon-note">Coming soon — sharing is currently disabled.</span></div>}
-    {step === 6 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Initiative ID</dt><dd>{initiativeId || "None"}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Guardrail policy</dt><dd>{policyText || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd><dt>Sharing</dt><dd>Disabled</dd></dl></div>}
+    {step === 6 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Initiative ID</dt><dd>{initiativeId || "None"}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Guardrail policy</dt><dd>{policyText || "None"}</dd><dt>Blocked topics</dt><dd>{blockedTopics || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd><dt>Sharing</dt><dd>Disabled</dd></dl></div>}
     {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 6 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</button>}</div>
   </div></section></div>}</div>;
 }

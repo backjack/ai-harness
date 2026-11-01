@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from main import app
 from controllers.service_status import _classify_message
 from services.analytics import get_analytics_report
-from services.agent_repository import _decode_agent, _serialize_agent_values
+from services.agent_repository import _decode_agent, _serialize_agent_values, update_agent as update_stored_agent
 from services.chat_events import ChatEventSink
 from services.mcp_client import call_mcp_tool as execute_mcp_call
 from services.tool_library import discover_source, test_tool as execute_library_tool
@@ -477,11 +477,21 @@ def test_conversation_guardrail_blocks_before_model_and_tools() -> None:
 def test_conversation_guardrail_allows_normal_execution() -> None:
     from services.conversation_agent import ConversationAgent
 
+    observed_prompts: list[str] = []
+
     class FakeExecutor:
         async def classify_guardrail(self, *args: object) -> bool:
             return True
 
-        async def execute_with_metadata(self, *args: object, **kwargs: object) -> ModelResponse:
+        async def execute_with_metadata(
+            self,
+            prompt: str,
+            system_prompts: list[str],
+            history: list[object],
+            tools: list[object],
+            **kwargs: object,
+        ) -> ModelResponse:
+            observed_prompts.extend(system_prompts)
             return ModelResponse("Allowed response")
 
     runtime = ConversationAgent(
@@ -491,6 +501,42 @@ def test_conversation_guardrail_allows_normal_execution() -> None:
     )
 
     assert asyncio.run(runtime.execute("Explain an invoice")).text == "Allowed response"
+    assert any("Only provide financial guidance." in prompt for prompt in observed_prompts)
+
+
+def test_conversation_guardrail_builds_blocked_topic_policy() -> None:
+    from services.conversation_agent import ConversationAgent
+
+    observed_policies: list[str] = []
+
+    class FakeExecutor:
+        async def classify_guardrail(self, policy: str, *args: object) -> bool:
+            observed_policies.append(policy)
+            return False
+
+        async def execute_with_metadata(self, *args: object, **kwargs: object) -> ModelResponse:
+            raise AssertionError("Normal model execution must not run for a blocked request")
+
+    runtime = ConversationAgent(
+        agent_id="agent-1", session_id="session-1", system_prompts=[], executor=FakeExecutor(), history=[],
+        guardrails={"blocked_topics": ["restricted-topic"], "out_of_scope_response": "Request blocked."},
+        tools=[object()], definition_signature="signature",
+    )
+
+    result = asyncio.run(runtime.execute("Tell me about restricted-topic"))
+
+    assert result.text == "Request blocked."
+    assert observed_policies == ["Do not allow requests related to these topics: restricted-topic."]
+
+
+def test_conversation_cache_signature_changes_with_guardrails() -> None:
+    from services.conversation_agent import ConversationAgentCache
+
+    agent = agent_record()
+    original_signature = ConversationAgentCache._definition_signature(agent)
+    agent["guardrails"] = {"blocked_topics": ["restricted-topic"]}
+
+    assert ConversationAgentCache._definition_signature(agent) != original_signature
 
 
 def test_conversation_guardrail_classifier_failure_blocks_safely() -> None:
@@ -748,6 +794,62 @@ def test_create_agent_returns_persisted_agent(monkeypatch) -> None:
     assert captured["faq"] == {"What can you do?": "I can help."}
 
 
+def test_create_agent_rejects_response_only_guardrails() -> None:
+    response = client.post(
+        "/api/agents",
+        json={
+            "agent_name": "Assistant",
+            "description": "Helpful assistant.",
+            "owner_email": "owner@example.com",
+            "model_id": "gpt-5.4-mini",
+            "tooling": [],
+            "model_type": "openai",
+            "guardrails": {"out_of_scope_response": "Topics on restricted-topic"},
+            "created_by": "owner@example.com",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "requires policy_text, allowed_topics, or blocked_topics" in response.text
+
+
+def test_create_agent_accepts_and_normalizes_blocked_topics(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def persist(values: dict[str, object]) -> dict[str, object]:
+        captured.update(values)
+        stored = agent_record()
+        stored["guardrails"] = values["guardrails"]
+        return stored
+
+    monkeypatch.setattr("controllers.agents.create_agent", persist)
+
+    response = client.post(
+        "/api/agents",
+        json={
+            "agent_name": "Assistant",
+            "description": "Helpful assistant.",
+            "owner_email": "owner@example.com",
+            "model_id": "gpt-5.4-mini",
+            "tooling": [],
+            "model_type": "openai",
+            "guardrails": {
+                "blocked_topics": [" restricted-topic ", "RESTRICTED-TOPIC"],
+                "out_of_scope_response": " Request blocked. ",
+            },
+            "created_by": "owner@example.com",
+        },
+    )
+
+    assert response.status_code == 201
+    assert captured["guardrails"] == {
+        "policy_text": None,
+        "allowed_topics": [],
+        "blocked_topics": ["restricted-topic"],
+        "out_of_scope_response": "Request blocked.",
+    }
+
+
 def test_create_agent_defaults_faq_to_null_storage_and_empty_response(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -955,6 +1057,88 @@ def test_update_agent_returns_not_found(monkeypatch) -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Agent not found"}
+
+
+def test_repository_update_agent_is_idempotent_when_values_are_unchanged(monkeypatch) -> None:
+    existing = agent_record()
+    queries: list[tuple[str, object]] = []
+    commits: list[bool] = []
+
+    class Cursor:
+        def execute(self, query: str, params: object) -> None:
+            queries.append((query, params))
+
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+        def close(self) -> None:
+            return None
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def commit(self) -> None:
+            commits.append(True)
+
+        def close(self) -> None:
+            return None
+
+    class Pool:
+        def get_connection(self) -> Connection:
+            return Connection()
+
+    monkeypatch.setattr("services.agent_repository.get_agent", lambda agent_id: existing)
+    monkeypatch.setattr("services.agent_repository.get_connection_pool", lambda: Pool())
+    monkeypatch.setattr("services.agent_repository.validate_tool_definitions", lambda tools: None)
+
+    result = update_stored_agent(str(existing["agent_id"]), {"agent_name": existing["agent_name"]})
+
+    assert result == existing
+    assert commits == [True]
+    assert "FOR UPDATE" in queries[0][0]
+    assert "isActive = 'Y'" in queries[1][0]
+
+
+def test_repository_update_agent_stops_if_agent_became_inactive(monkeypatch) -> None:
+    existing = agent_record()
+    queries: list[str] = []
+    commits: list[bool] = []
+
+    class Cursor:
+        def execute(self, query: str, params: object) -> None:
+            queries.append(query)
+
+        def fetchone(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def commit(self) -> None:
+            commits.append(True)
+
+        def close(self) -> None:
+            return None
+
+    class Pool:
+        def get_connection(self) -> Connection:
+            return Connection()
+
+    monkeypatch.setattr("services.agent_repository.get_agent", lambda agent_id: existing)
+    monkeypatch.setattr("services.agent_repository.get_connection_pool", lambda: Pool())
+    monkeypatch.setattr("services.agent_repository.validate_tool_definitions", lambda tools: None)
+
+    result = update_stored_agent(str(existing["agent_id"]), {"agent_name": "Updated"})
+
+    assert result is None
+    assert len(queries) == 1
+    assert "FOR UPDATE" in queries[0]
+    assert commits == []
 
 
 def test_update_agent_persists_initiative_id(monkeypatch) -> None:
