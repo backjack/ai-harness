@@ -252,6 +252,15 @@ function LiveExecutionTrace({ events, agentName, status }: { events: ChatEvent[]
   return <ExecutionTrace events={events} agentName={agentName} status={status} onClose={() => setVisible(false)} />;
 }
 
+function AssistantTypingIndicator({ agentName }: { agentName: string }) {
+  return <article className="message assistant typing-message" role="status" aria-label={`${agentName} is preparing a response`}>
+    <div className="message-card">
+      <div className="message-meta"><span className="agent-avatar" aria-hidden="true">{agentInitials(agentName)}</span><span className="agent-status" title="Available" aria-label="Available" /><span>{agentName}</span></div>
+      <div className="typing-bubble" aria-hidden="true"><span /><span /><span /></div>
+    </div>
+  </article>;
+}
+
 function agentInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "AI";
 }
@@ -259,6 +268,7 @@ function agentInitials(name: string) {
 type ModelOption = { id: string; type: Agent["model_type"]; label: string; available: boolean };
 const MODEL_OPTIONS: ModelOption[] = [
   { id: "gpt-5.4-mini", type: "openai", label: "GPT-5.4 mini (OpenAI)", available: true },
+  { id: "gpt-4.1-mini", type: "openai", label: "GPT-4.1 mini (OpenAI, legacy)", available: true },
   { id: "llama3.2:3b", type: "ollama", label: "Llama 3.2 3B (Ollama)", available: false },
   { id: "gpt-5.4", type: "openai", label: "GPT-5.4 (OpenAI)", available: false },
   { id: "claude-sonnet-4.5", type: "openai", label: "Claude Sonnet 4.5 (Anthropic)", available: false },
@@ -397,6 +407,18 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
     finally { setLoading(false); }
   };
   useEffect(() => { void load(true); return () => window.clearTimeout(toastTimerRef.current); }, []);
+  useEffect(() => {
+    const mcpSources = sources.filter((source) => source.source_type === "mcp");
+    if (mcpSources.length === 0) {
+      if (selectedSourceId) setSelectedSourceId("");
+      return;
+    }
+    if (mcpSources.some((source) => source.source_id === selectedSourceId)) return;
+
+    const populatedSourceIds = new Set(tools.map((tool) => tool.source_id));
+    const preferredSource = mcpSources.find((source) => populatedSourceIds.has(source.source_id)) ?? mcpSources[0];
+    setSelectedSourceId(preferredSource.source_id);
+  }, [sources, tools, selectedSourceId]);
 
   const visibleTools = tools.filter((tool) => {
     const query = search.trim().toLowerCase();
@@ -863,7 +885,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   const visibleAgents = agents.filter((agent) => !agentQuery || [agent.agent_name, agent.description, agent.model_id].some((value) => value.toLocaleLowerCase().includes(agentQuery)))
     .sort((left, right) => left.agent_name.localeCompare(right.agent_name, undefined, { sensitivity: "base" }));
 
-  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><div className="card-actions"><button type="button" className="marketplace-icon-button secondary-icon agent-card-action" disabled={saving} onClick={() => openEdit(agent)} aria-label={`Edit ${agent.agent_name}`} title={`Edit ${agent.agent_name}`}><MarketplaceActionIcon name="edit" /></button><button type="button" className="marketplace-icon-button danger-icon agent-card-action" disabled={saving} onClick={() => void removeAgent(agent)} aria-label={`Delete ${agent.agent_name}`} title={`Delete ${agent.agent_name}`}><MarketplaceActionIcon name="trash" /></button></div></div><p>{agent.description || "No description provided."}</p><span className="agent-model-tag" title={agent.model_id}>{agent.model_id}</span></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>
+  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><div className="card-actions"><button type="button" className="marketplace-icon-button secondary-icon agent-card-action" disabled={saving} onClick={() => openEdit(agent)} aria-label={`Edit ${agent.agent_name}`} title={`Edit ${agent.agent_name}`}><MarketplaceActionIcon name="edit" /></button><button type="button" className="marketplace-icon-button danger-icon agent-card-action" disabled={saving} onClick={() => void removeAgent(agent)} aria-label={`Delete ${agent.agent_name}`} title={`Delete ${agent.agent_name}`}><MarketplaceActionIcon name="trash" /></button></div></div><p title={agent.description || undefined}>{agent.description || "No description provided."}</p><span className="agent-model-tag" title={agent.model_id}>{agent.model_id}</span></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>
         {[
           { id: 1, label: "Setup", icon: "details" as const },
           { id: 2, label: "Tools", icon: "tools" as const },
@@ -1074,6 +1096,7 @@ export default function App() {
   const conversationLoadControllerRef = useRef<AbortController | null>(null);
   const routeDraftRef = useRef<Conversation | null>(null);
   const active = conversations.find((conversation) => conversation.id === activeId);
+  const showTypingIndicator = streaming && active?.executionEvents !== undefined;
   const localDraft = conversations.find((conversation) => !conversation.sessionId && !conversation.messages.length);
   const savedConversations = conversations.filter((conversation) => conversation.id !== localDraft?.id).slice(0, 5);
   const sidebarConversations = localDraft ? [localDraft, ...savedConversations] : savedConversations;
@@ -1344,6 +1367,7 @@ export default function App() {
         {activeConversationLoading && <div className="transcript-loading" role="status" aria-label="Loading conversation"><span /><span /><span /><p>Loading conversation</p></div>}
         {!activeConversationLoading && !active?.messages.length && <div className="welcome-content"><p className="eyebrow">AI HARNESS</p><h1>Where should we start?</h1><p>Ask your configured AI agent anything.</p><div className="suggestions"><button onClick={() => setPrompt("Analyse my portfolio allocation")}>Analyse my portfolio allocation</button><button onClick={() => setPrompt("Get the latest price for AAPL")}>Get a current stock price</button><button onClick={() => setPrompt("Calculate my net worth with stock holdings")}>Calculate my net worth with stock holdings</button></div></div>}
         {active?.messages.map((message, index) => <article key={`${message.role}-${index}`} className={`message ${message.role}`}><div className="message-card"><div className="message-meta">{message.role === "assistant" ? <><span className="agent-avatar" aria-hidden="true">{agentInitials(conversationAgentName)}</span><span className="agent-status" title="Available" aria-label="Available" /><span>{conversationAgentName}</span></> : <span className="user-avatar">You</span>}</div>{message.response ? <MessageContent message={message.response} /> : <div className="message-text">{message.content}</div>}<time className="message-time">{formatMessageTime(message.createdAt) ?? "Just now"}</time>{message.role === "assistant" && message.response && <MessageActions message={message.response} executionEvents={message.executionEvents} executionAgentName={message.executionAgentName} executionStatus={message.executionStatus} />}</div></article>)}
+        {showTypingIndicator && <AssistantTypingIndicator agentName={active?.executionAgentName ?? conversationAgentName} />}
         {(active?.executionEvents?.length ?? 0) > 0 && <LiveExecutionTrace events={active?.executionEvents ?? []} agentName={active?.executionAgentName ?? conversationAgentName} status={active?.executionStatus ?? "running"} />}
         {error && <div className="error-banner">{error}</div>}
       </div>

@@ -9,6 +9,7 @@ from services.agent_repository import get_analytics_usage
 LOOKBACK_DAYS = 30
 TOKEN_UNIT = Decimal("1000000")
 MODEL_RATES_USD_PER_MILLION: dict[str, tuple[Decimal, Decimal]] = {
+    "gpt-4.1-mini": (Decimal("0.40"), Decimal("1.60")),
     "gpt-5.4-mini": (Decimal("0.75"), Decimal("4.50")),
     "gpt-5.4-mini-2026-03-17": (Decimal("0.75"), Decimal("4.50")),
     "gpt-5.6-luna": (Decimal("0.20"), Decimal("1.20")),

@@ -22,12 +22,17 @@ The service exposes:
 
 - `GET /api/` — service identifier
 - `GET /api/health` — health status
-- `GET /api/docs` — interactive OpenAPI documentation
+- `GET /docs` or `GET /api/docs` — interactive OpenAPI documentation
 
 ## API documentation
 
-Swagger UI is available at `http://127.0.0.1:8000/api/docs`. The raw OpenAPI
-schema is available at `http://127.0.0.1:8000/api/openapi.json`.
+Swagger UI is available at `http://127.0.0.1:8000/docs` and
+`http://127.0.0.1:8000/api/docs`. Its browser assets are served locally, so the
+documentation works without CDN access. The raw OpenAPI schema is available at
+`http://127.0.0.1:8000/api/openapi.json`.
+
+The agent model picker supports `gpt-5.4-mini` (the default) and the legacy
+`gpt-4.1-mini` OpenAI model.
 
 ## Configuration
 

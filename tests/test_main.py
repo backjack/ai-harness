@@ -128,6 +128,18 @@ def test_swagger_ui_is_available() -> None:
 
     assert response.status_code == 200
     assert "Swagger UI" in response.text
+    assert 'src="/api/docs-assets/swagger-ui-bundle.js"' in response.text
+    assert 'href="/api/docs-assets/swagger-ui.css"' in response.text
+    assert "cdn.jsdelivr.net" not in response.text
+
+    shortcut = client.get("/docs", follow_redirects=False)
+    assert shortcut.status_code == 307
+    assert shortcut.headers["location"] == "/api/docs"
+
+    assert client.get("/api/docs-assets/swagger-ui-bundle.js").status_code == 200
+    assert client.get("/api/docs-assets/swagger-ui.css").status_code == 200
+    assert client.get("/api/docs-assets/favicon-32x32.png").status_code == 200
+    assert client.get("/api/docs/oauth2-redirect").status_code == 200
 
 
 def test_openapi_schema_documents_the_api() -> None:
@@ -382,6 +394,37 @@ def test_analytics_calculates_gpt_5_4_mini_costs(monkeypatch) -> None:
     assert report["summary"]["cost_usd"] == 3.0
     assert report["by_model"][0]["cost_usd"] == 3.0
     assert report["by_agent"][0]["cost_usd"] == 3.0
+
+
+def test_analytics_calculates_gpt_4_1_mini_costs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "services.analytics.get_analytics_usage",
+        lambda **kwargs: {
+            "by_model": [{
+                "model_id": "gpt-4.1-mini",
+                "interaction_count": 1,
+                "input_tokens": 1_000_000,
+                "output_tokens": 500_000,
+            }],
+            "by_agent": [{
+                "agent_id": "agent-1",
+                "agent_name": "Legacy assistant",
+                "model_id": "gpt-4.1-mini",
+                "interaction_count": 1,
+                "input_tokens": 1_000_000,
+                "output_tokens": 500_000,
+            }],
+        },
+    )
+
+    report = get_analytics_report()
+
+    assert report["summary"]["cost_status"] == "available"
+    assert report["summary"]["input_cost_usd"] == 0.4
+    assert report["summary"]["output_cost_usd"] == 0.8
+    assert report["summary"]["cost_usd"] == 1.2
+    assert report["by_model"][0]["cost_usd"] == 1.2
+    assert report["by_agent"][0]["cost_usd"] == 1.2
 
 
 def test_analytics_endpoint_reports_database_failure(monkeypatch) -> None:
@@ -1934,6 +1977,25 @@ def test_model_execution_factory_selects_openai(monkeypatch) -> None:
 
     try:
         assert isinstance(get_model_execution(), ModelExecution)
+    finally:
+        get_model_execution.cache_clear()
+
+
+def test_model_execution_factory_passes_selected_openai_model(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, *, model: str) -> None:
+            captured["model"] = model
+
+    monkeypatch.setattr("services.model_execution.ChatOpenAI", FakeChatOpenAI)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    get_model_execution.cache_clear()
+
+    try:
+        executor = get_model_execution("openai", "gpt-4.1-mini")
+        assert isinstance(executor, ModelExecution)
+        assert captured["model"] == "gpt-4.1-mini"
     finally:
         get_model_execution.cache_clear()
 
