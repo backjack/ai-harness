@@ -15,7 +15,7 @@ from services.analytics import get_analytics_report
 from services.agent_repository import _decode_agent, _serialize_agent_values, update_agent as update_stored_agent
 from services.chat_events import ChatEventSink
 from services.mcp_client import call_mcp_tool as execute_mcp_call
-from services.tool_library import discover_source, test_tool as execute_library_tool
+from services.tool_library import discover_source, test_inline_tool as execute_inline_tool, test_tool as execute_library_tool
 from utils.config import get_config
 from services.model_execution import (
     ModelExecution,
@@ -1352,6 +1352,64 @@ def test_tool_library_lists_persisted_definitions(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["display_name"] == "Find invoices"
+
+
+def test_inline_tool_preview_endpoint_uses_unsaved_definition(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def preview(name: str, description: str, source_code: str,
+                      arguments: dict[str, object]) -> dict[str, object]:
+        captured.update({"name": name, "description": description, "source_code": source_code, "arguments": arguments})
+        return {"outcome": "success", "output": 5, "error": None, "duration_ms": 2}
+
+    monkeypatch.setattr("controllers.tool_library.test_inline_tool", preview)
+    response = client.post("/api/tools/inline/test", json={
+        "name": "add", "description": "Add values", "source_code": "def add(a, b): return a + b",
+        "arguments": {"a": 2, "b": 3},
+    })
+
+    assert response.status_code == 200
+    assert response.json()["output"] == 5
+    assert captured["name"] == "add"
+    assert captured["arguments"] == {"a": 2, "b": 3}
+
+
+def test_inline_tool_preview_executes_without_persistence() -> None:
+    result = asyncio.run(execute_inline_tool(
+        "add", "Add values", "def add(a: int, b: int) -> int:\n    return a + b", {"a": 4, "b": 6},
+    ))
+
+    assert result["outcome"] == "success"
+    assert result["output"] == 10
+    assert "execution_id" not in result
+
+
+def test_inline_tool_preview_returns_validation_error() -> None:
+    result = asyncio.run(execute_inline_tool(
+        "expected_name", "Invalid tool", "def another_name():\n    return 1", {},
+    ))
+
+    assert result["outcome"] == "error"
+    assert "callable named 'expected_name'" in str(result["error"])
+
+
+def test_inline_tool_preview_reports_runtime_errors() -> None:
+    result = asyncio.run(execute_inline_tool(
+        "explode", "Raise an error", "def explode():\n    raise RuntimeError('preview failed')", {},
+    ))
+
+    assert result["outcome"] == "error"
+    assert result["error"] == "RuntimeError: preview failed"
+
+
+def test_inline_tool_preview_truncates_large_output() -> None:
+    result = asyncio.run(execute_inline_tool(
+        "large", "Return a large payload", "def large():\n    return 'x' * 21000", {},
+    ))
+
+    assert result["outcome"] == "success"
+    assert result["output"]["truncated"] is True
+    assert len(result["output"]["preview"]) == 19000
 
 
 def test_mcp_registration_is_saved_when_discovery_is_unavailable(monkeypatch) -> None:

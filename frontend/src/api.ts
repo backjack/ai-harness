@@ -1,4 +1,4 @@
-import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, ChatEvent, ConversationDetail, ConversationSummary, ToolDefinition, ToolSource, ToolTestResult } from "./types";
+import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, ChatEvent, ConversationDetail, ConversationSummary, InlineToolTestResult, ToolDefinition, ToolSource, ToolTestResult } from "./types";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
@@ -28,6 +28,7 @@ export const updateMcpSource = (sourceId: string, body: { name: string; descript
 export const testToolSource = (sourceId: string) => apiJson<ToolSourceTest>(`/tool-sources/${encodeURIComponent(sourceId)}/test`, { method: "POST" });
 export const createCustomTool = (body: Record<string, unknown>) => apiJson<ToolDefinition>("/tools/custom", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const testLibraryTool = (toolId: string, arguments_: Record<string, unknown>, invokedBy: string) => apiJson<ToolTestResult>(`/tools/${encodeURIComponent(toolId)}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ arguments: arguments_, invoked_by: invokedBy }) });
+export const testInlineTool = (body: { name: string; description: string; source_code: string; arguments: Record<string, unknown> }) => apiJson<InlineToolTestResult>("/tools/inline/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const deleteToolSource = (sourceId: string) => apiNoContent(`/tool-sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" });
 export const deleteLibraryTool = (toolId: string) => apiNoContent(`/tools/${encodeURIComponent(toolId)}`, { method: "DELETE" });
 

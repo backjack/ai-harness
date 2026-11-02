@@ -5,7 +5,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import AnyHttpUrl, BaseModel, Field
 
-from services.tool_library import create_custom_tool, create_source, deactivate_source, deactivate_tool, discover_source, get_tool, list_executions, list_sources, list_tools, test_tool, update_source
+from services.tool_library import create_custom_tool, create_source, deactivate_source, deactivate_tool, discover_source, get_tool, list_executions, list_sources, list_tools, test_inline_tool, test_tool, update_source
 from services.tool_runtime import ToolFunctionValidationError
 from utils.database import DatabaseUnavailableError
 
@@ -41,6 +41,13 @@ class CustomToolCreate(BaseModel):
 class ToolTestRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     invoked_by: str = Field(min_length=3, max_length=320)
+
+
+class InlineToolTestRequest(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", max_length=255)
+    description: str = Field(min_length=1, max_length=2000)
+    source_code: str = Field(min_length=1)
+    arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 def _db_error(exc: DatabaseUnavailableError) -> HTTPException:
@@ -109,6 +116,11 @@ async def create_custom_endpoint(request: CustomToolCreate) -> dict[str, Any]:
     try: return create_custom_tool(request.model_dump())
     except ToolFunctionValidationError as exc: raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DatabaseUnavailableError as exc: raise _db_error(exc) from exc
+
+
+@router.post("/tools/inline/test")
+async def test_inline_tool_endpoint(request: InlineToolTestRequest) -> dict[str, Any]:
+    return await test_inline_tool(request.name, request.description, request.source_code, request.arguments)
 
 
 @router.post("/tools/{tool_definition_id}/test")

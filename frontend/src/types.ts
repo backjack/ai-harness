@@ -10,6 +10,7 @@ export type ToolEffect = "read" | "calculate" | "write" | "delete" | "unknown";
 export type ToolSource = { source_id: string; source_type: "mcp" | "custom"; name: string; description: string | null; endpoint: string | null; transport: string | null; owner_email: string; status: "available" | "unavailable"; last_error: string | null; last_checked_at: string | null; tool_count: number };
 export type ToolDefinition = { tool_definition_id: string; source_id: string; external_name: string; display_name: string; description: string; connection_type: "mcp" | "custom_langchain"; input_schema: Record<string, unknown>; output_schema: Record<string, unknown> | null; version: string | null; category: string; effect: ToolEffect; effect_source: string; status: "available" | "unavailable"; examples: string[] | null; output_preview: unknown; source_code: string | null; enabled: boolean; source_name: string; owner_email: string; endpoint: string | null };
 export type ToolTestResult = { execution_id: string; outcome: "success" | "error"; output: unknown; error: string | null; duration_ms: number };
+export type InlineToolTestResult = { outcome: "success" | "error"; output: unknown; error: string | null; duration_ms: number };
 
 export type AgentGuardrails = {
   policy_text?: string | null;

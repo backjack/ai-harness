@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
 import ReactMarkdown from "react-markdown";
@@ -6,8 +6,8 @@ import remarkGfm from "remark-gfm";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { matchPath, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { createAgent, createCustomTool, deleteAgent, deleteLibraryTool, deleteToolSource, getAgents, getAnalytics, getConversation, getConversations, getTools, getToolsForSource, getToolSources, registerMcpSource, streamChat, testLibraryTool, testToolSource, updateAgent, updateMcpSource } from "./api";
-import type { Agent, AgentCreate, AgentGuardrails, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, ToolDefinition, ToolEffect, ToolSource, ToolTestResult, UserProfile } from "./types";
+import { createAgent, createCustomTool, deleteAgent, deleteLibraryTool, deleteToolSource, getAgents, getAnalytics, getConversation, getConversations, getTools, getToolsForSource, getToolSources, registerMcpSource, streamChat, testInlineTool, testLibraryTool, testToolSource, updateAgent, updateMcpSource } from "./api";
+import type { Agent, AgentCreate, AgentGuardrails, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, InlineToolTestResult, ToolDefinition, ToolEffect, ToolSource, ToolTestResult, UserProfile } from "./types";
 
 const USER_PROFILE: UserProfile = { name: "Neeraj Sharma", emailId: "neerajs28288@gmail.com" };
 
@@ -62,7 +62,7 @@ function AvailabilityDot({ status }: { status: string }) {
   return <span className={`availability-dot ${available ? "available" : "error"}`} role="img" aria-label={label} title={label} />;
 }
 
-type MarketplaceActionIconName = "connect" | "create" | "refresh" | "edit" | "trash" | "save" | "user-plus" | "play" | "json" | "close";
+type MarketplaceActionIconName = "connect" | "create" | "refresh" | "edit" | "trash" | "save" | "user-plus" | "play" | "json" | "close" | "plus" | "check" | "arrow-left" | "arrow-right";
 
 function MarketplaceActionIcon({ name }: { name: MarketplaceActionIconName }) {
   const paths = {
@@ -76,9 +76,56 @@ function MarketplaceActionIcon({ name }: { name: MarketplaceActionIconName }) {
     play: <path d="m8 5 11 7-11 7V5Z" />,
     json: <><path d="M6 3h9l3 3v15H6V3Z" /><path d="M15 3v4h4M10 10c-1 0-1 .8-1 2s0 2-1 2c1 0 1 .8 1 2s0 2 1 2M14 10c1 0 1 .8 1 2s0 2 1 2c-1 0-1 .8-1 2s0 2-1 2" /></>,
     close: <path d="M6 6l12 12M18 6 6 18" />,
+    plus: <path d="M12 5v14M5 12h14" />,
+    check: <path d="m5 12 4 4L19 6" />,
+    "arrow-left": <><path d="M19 12H5" /><path d="m11 18-6-6 6-6" /></>,
+    "arrow-right": <><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></>,
   };
   return <svg className="marketplace-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
+
+function WizardStepIcon({ name }: { name: "details" | "prompts" | "tools" | "guardrails" | "review" }) {
+  switch (name) {
+    case "details":
+      return (
+        <svg className="wizard-step-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+          <line x1="10" y1="9" x2="8" y2="9" />
+        </svg>
+      );
+    case "prompts":
+      return (
+        <svg className="wizard-step-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          <line x1="8" y1="9" x2="16" y2="9" />
+          <line x1="8" y1="13" x2="14" y2="13" />
+        </svg>
+      );
+    case "tools":
+      return (
+        <svg className="wizard-step-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+        </svg>
+      );
+    case "guardrails":
+      return (
+        <svg className="wizard-step-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+      );
+    case "review":
+      return (
+        <svg className="wizard-step-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M9 11l3 3L22 4" />
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </svg>
+      );
+  }
+}
+
 
 function ToastBar({ toast, onClose }: { toast: { type: "success" | "error"; message: string }; onClose: () => void }) {
   return <div className={`toast-bar ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}><span>{toast.message}</span><button type="button" onClick={onClose} aria-label="Close notification" title="Close notification"><MarketplaceActionIcon name="close" /></button></div>;
@@ -212,7 +259,7 @@ function agentInitials(name: string) {
 type ModelOption = { id: string; type: Agent["model_type"]; label: string; available: boolean };
 const MODEL_OPTIONS: ModelOption[] = [
   { id: "gpt-5.4-mini", type: "openai", label: "GPT-5.4 mini (OpenAI)", available: true },
-  { id: "llama3.2:3b", type: "ollama", label: "Llama 3.2 3B (Ollama)", available: true },
+  { id: "llama3.2:3b", type: "ollama", label: "Llama 3.2 3B (Ollama)", available: false },
   { id: "gpt-5.4", type: "openai", label: "GPT-5.4 (OpenAI)", available: false },
   { id: "claude-sonnet-4.5", type: "openai", label: "Claude Sonnet 4.5 (Anthropic)", available: false },
   { id: "gemini-2.5-pro", type: "openai", label: "Gemini 2.5 Pro (Google)", available: false },
@@ -528,11 +575,29 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   const [initiativeId, setInitiativeId] = useState("");
   const [tools, setTools] = useState<AgentTool[]>([]);
   const [libraryTools, setLibraryTools] = useState<ToolDefinition[]>([]);
-  const [selectedToolIndex, setSelectedToolIndex] = useState<number | null>(null);
+  const [toolDraft, setToolDraft] = useState<{ index: number | null; tool: AgentTool } | null>(null);
+  const [toolConfigTab, setToolConfigTab] = useState<"configure" | "test">("configure");
+  const [toolDraftError, setToolDraftError] = useState("");
+  const [inlineTestInput, setInlineTestInput] = useState("{}");
+  const [inlineTestInputError, setInlineTestInputError] = useState("");
+  const [inlineTestResult, setInlineTestResult] = useState<InlineToolTestResult | null>(null);
+  const [toolTesting, setToolTesting] = useState(false);
   const [policyText, setPolicyText] = useState("");
   const [blockedTopics, setBlockedTopics] = useState("");
   const [fallback, setFallback] = useState("");
   const [selectedGuardrail, setSelectedGuardrail] = useState<"policy" | "blocked" | "fallback">("policy");
+  const [toolSearch, setToolSearch] = useState("");
+  const [serverFilter, setServerFilter] = useState("");
+
+  const uniqueServers = useMemo(() => {
+    const set = new Set<string>();
+    for (const tool of libraryTools) {
+      if (tool.status !== "available") continue;
+      const serverName = tool.source_name || (tool.connection_type === "mcp" ? "MCP Server" : "Custom Tools");
+      set.add(serverName);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }, [libraryTools]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -546,18 +611,76 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
 
   function addLibraryTool(tool: ToolDefinition) {
     if (tools.some((item) => item.tool_definition_id === tool.tool_definition_id)) return;
-    setTools((items) => [...items, {
+    const newTool: AgentTool = {
       name: tool.external_name, description: tool.description, source_code: tool.source_code ?? "", enabled: true,
       connection_type: tool.connection_type, tool_definition_id: tool.tool_definition_id, source_id: tool.source_id,
       version: tool.version, category: tool.category, effect: tool.effect, effect_source: tool.effect_source,
       input_schema: tool.input_schema, approval_policy: "automatic", allowed_scope: {}, defaults: {},
-    }]);
+    };
+    const nextIndex = tools.length;
+    setTools((items) => [...items, newTool]);
+    if (newTool.connection_type !== "mcp") openToolConfig(nextIndex, newTool);
   }
+
+  function handleToolClick(tool: ToolDefinition) {
+    const existingIndex = tools.findIndex((item) => item.tool_definition_id === tool.tool_definition_id);
+    if (existingIndex >= 0) {
+      if (tools[existingIndex]?.connection_type !== "mcp") openToolConfig(existingIndex, tools[existingIndex]);
+    } else {
+      addLibraryTool(tool);
+    }
+  }
+
+  const mcpServerGroups = useMemo(() => {
+    const query = toolSearch.trim().toLowerCase();
+    const groupsMap = new Map<string, {
+      key: string;
+      serverName: string;
+      connectionType: "mcp" | "custom_langchain";
+      tools: ToolDefinition[];
+    }>();
+
+    for (const tool of libraryTools) {
+      if (tool.status !== "available") continue;
+      const serverName = tool.source_name || (tool.connection_type === "mcp" ? "MCP Server" : "Custom Tools");
+      if (serverFilter && serverName !== serverFilter) continue;
+      const isMatch = !query || [
+        tool.display_name,
+        tool.external_name,
+        tool.description,
+        tool.source_name,
+        tool.category,
+      ].some((val) => typeof val === "string" && val.toLowerCase().includes(query));
+
+      if (!isMatch) continue;
+
+      const groupKey = tool.source_id || tool.source_name || (tool.connection_type === "mcp" ? "mcp_default" : "custom_default");
+
+      let group = groupsMap.get(groupKey);
+      if (!group) {
+        group = {
+          key: groupKey,
+          serverName,
+          connectionType: tool.connection_type,
+          tools: [],
+        };
+        groupsMap.set(groupKey, group);
+      }
+      group.tools.push(tool);
+    }
+
+    return Array.from(groupsMap.values()).sort((a, b) => {
+      if (a.connectionType === b.connectionType) {
+        return a.serverName.localeCompare(b.serverName, undefined, { sensitivity: "base" });
+      }
+      return a.connectionType === "mcp" ? -1 : 1;
+    });
+  }, [libraryTools, toolSearch, serverFilter]);
   const selectedModel = availableModels.find((model) => model.id === modelId && model.available) ?? availableModels.find((model) => model.available) ?? availableModels[0];
 
   function resetForm() {
     setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setUserPrompt(""); setInitiativeId("");
-    setTools([]); setSelectedToolIndex(null); setPolicyText(""); setBlockedTopics(""); setFallback(""); setSelectedGuardrail("policy"); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
+    setTools([]); setToolDraft(null); setToolConfigTab("configure"); setToolDraftError(""); setInlineTestInput("{}"); setInlineTestInputError(""); setInlineTestResult(null); setToolTesting(false); setPolicyText(""); setBlockedTopics(""); setFallback(""); setSelectedGuardrail("policy"); setToolSearch(""); setServerFilter(""); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
   }
 
   function openCreate() { resetForm(); setCreating(true); }
@@ -567,7 +690,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
     const savedBlockedTopics = Array.isArray(guardrails.blocked_topics) ? guardrails.blocked_topics.filter((topic): topic is string => typeof topic === "string") : [];
     const legacyPolicy = allowedTopics.length ? `Only allow requests related to these topics: ${allowedTopics.join(", ")}.` : "";
     setEditingAgent(agent); setName(agent.agent_name); setDescription(agent.description); setModelId(agent.model_id);
-    setSystemPrompt(agent.system_prompts[0] ?? ""); setUserPrompt(agent.user_prompts?.[0] ?? ""); setInitiativeId(agent.initiative_id ?? ""); setTools(agent.tooling.map((tool) => ({ ...tool }))); setSelectedToolIndex(agent.tooling.length ? 0 : null);
+    setSystemPrompt(agent.system_prompts[0] ?? ""); setUserPrompt(agent.user_prompts?.[0] ?? ""); setInitiativeId(agent.initiative_id ?? ""); setTools(agent.tooling.map((tool) => ({ ...tool })));
     setPolicyText(typeof guardrails.policy_text === "string" ? guardrails.policy_text : legacyPolicy); setBlockedTopics(savedBlockedTopics.join("\n")); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
     setStep(1); setError(""); setCreating(true);
   }
@@ -581,11 +704,11 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   useEffect(() => {
     if (!creating) return undefined;
     const dismissOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeModal();
+      if (event.key === "Escape") toolDraft ? closeToolConfig() : closeModal();
     };
     window.addEventListener("keydown", dismissOnEscape);
     return () => window.removeEventListener("keydown", dismissOnEscape);
-  }, [creating, saving]);
+  }, [creating, saving, toolDraft, toolTesting]);
 
   useEffect(() => {
     if (!modelMenuOpen) return undefined;
@@ -616,28 +739,86 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   function next() {
     const message = validationError(step);
     if (message) { setError(message); return; }
-    setError(""); setStep((value) => Math.min(6, value + 1));
+    setError(""); setStep((value) => Math.min(5, value + 1));
   }
 
   function goToStep(nextStep: number) {
     if (saving) return;
     setError(""); setModelMenuOpen(false); setStep(nextStep);
   }
-  function updateTool(index: number, field: keyof AgentTool, value: string | boolean) {
-    setTools((items) => items.map((tool, itemIndex) => itemIndex === index ? { ...tool, [field]: value } : tool));
+  function resetInlineTest() {
+    setToolConfigTab("configure");
+    setToolDraftError("");
+    setInlineTestInput("{}");
+    setInlineTestInputError("");
+    setInlineTestResult(null);
+  }
+
+  function openToolConfig(index: number | null, tool: AgentTool) {
+    if (tool.connection_type === "mcp") return;
+    setToolDraft({ index, tool: { ...tool, connection_type: "custom_langchain" } });
+    resetInlineTest();
+  }
+
+  function closeToolConfig() {
+    if (toolTesting) return;
+    setToolDraft(null);
+    resetInlineTest();
+  }
+
+  function updateToolDraft(field: keyof AgentTool, value: string | boolean) {
+    setToolDraft((draft) => draft ? { ...draft, tool: { ...draft.tool, [field]: value } } : draft);
+    setToolDraftError("");
+  }
+
+  function toolDraftValidationError() {
+    if (!toolDraft?.tool.name.trim() || !toolDraft.tool.description.trim() || !toolDraft.tool.source_code.trim()) return "Name, description, and Python source are required.";
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(toolDraft.tool.name.trim())) return "Name must be a valid Python function name.";
+    return "";
+  }
+
+  function saveToolConfig(event: FormEvent) {
+    event.preventDefault();
+    if (!toolDraft) return;
+    const message = toolDraftValidationError();
+    if (message) { setToolDraftError(message); return; }
+    const nextTool = { ...toolDraft.tool, name: toolDraft.tool.name.trim(), description: toolDraft.tool.description.trim() };
+    setTools((items) => toolDraft.index === null
+      ? [...items, nextTool]
+      : items.map((tool, index) => index === toolDraft.index ? nextTool : tool));
+    closeToolConfig();
+  }
+
+  async function runInlineToolTest(event: FormEvent) {
+    event.preventDefault();
+    if (!toolDraft || toolDraft.tool.tool_definition_id) return;
+    const message = toolDraftValidationError();
+    if (message) { setToolDraftError(message); setToolConfigTab("configure"); return; }
+    let arguments_: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(inlineTestInput) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Arguments must be a JSON object");
+      arguments_ = parsed as Record<string, unknown>;
+      setInlineTestInputError("");
+    } catch (reason) {
+      setInlineTestInputError(reason instanceof Error ? reason.message : "Enter valid JSON arguments.");
+      return;
+    }
+    setToolTesting(true); setInlineTestResult(null);
+    try {
+      setInlineTestResult(await testInlineTool({
+        name: toolDraft.tool.name.trim(),
+        description: toolDraft.tool.description.trim(),
+        source_code: toolDraft.tool.source_code,
+        arguments: arguments_,
+      }));
+    } catch (reason) {
+      setInlineTestResult({ outcome: "error", output: null, error: reason instanceof Error ? reason.message : "Inline tool test failed.", duration_ms: 0 });
+    } finally { setToolTesting(false); }
   }
 
   function addTool() {
-    setTools((items) => { setSelectedToolIndex(items.length); return [...items, { name: "", description: "", source_code: "", enabled: true }]; });
-  }
-
-  function removeSelectedTool() {
-    if (selectedToolIndex === null) return;
-    setTools((items) => {
-      const next = items.filter((_, index) => index !== selectedToolIndex);
-      setSelectedToolIndex(next.length ? Math.min(selectedToolIndex, next.length - 1) : null);
-      return next;
-    });
+    openToolConfig(null, { name: "", description: "", source_code: "", enabled: true, connection_type: "custom_langchain", approval_policy: "automatic" });
   }
   async function save() {
     const detailsError = validationError(1);
@@ -681,18 +862,196 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   const agentQuery = search.trim().toLocaleLowerCase();
   const visibleAgents = agents.filter((agent) => !agentQuery || [agent.agent_name, agent.description, agent.model_id].some((value) => value.toLocaleLowerCase().includes(agentQuery)))
     .sort((left, right) => left.agent_name.localeCompare(right.agent_name, undefined, { sensitivity: "base" }));
-  const selectedTool = selectedToolIndex === null ? undefined : tools[selectedToolIndex];
 
-  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><div className="card-actions"><button type="button" className="text-button" onClick={() => openEdit(agent)}>Edit</button><button type="button" className="danger-text-button" disabled={saving} onClick={() => void removeAgent(agent)}>Delete</button></div></div><p>{agent.description || "No description provided."}</p><small>{agent.model_id}</small></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>{["Details", "Prompts", "Tools", "Guardrails", "Sharing", "Review"].map((label, index) => <button type="button" className={step === index + 1 ? "active" : step > index + 1 ? "complete" : ""} aria-current={step === index + 1 ? "step" : undefined} disabled={saving} onClick={() => goToStep(index + 1)} key={label}>{index + 1}. {label}</button>)}</div><div className="agent-wizard">
+  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><div className="card-actions"><button type="button" className="marketplace-icon-button secondary-icon agent-card-action" disabled={saving} onClick={() => openEdit(agent)} aria-label={`Edit ${agent.agent_name}`} title={`Edit ${agent.agent_name}`}><MarketplaceActionIcon name="edit" /></button><button type="button" className="marketplace-icon-button danger-icon agent-card-action" disabled={saving} onClick={() => void removeAgent(agent)} aria-label={`Delete ${agent.agent_name}`} title={`Delete ${agent.agent_name}`}><MarketplaceActionIcon name="trash" /></button></div></div><p>{agent.description || "No description provided."}</p><span className="agent-model-tag" title={agent.model_id}>{agent.model_id}</span></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>
+        {[
+          { id: 1, label: "Details", icon: "details" as const },
+          { id: 2, label: "Prompts", icon: "prompts" as const },
+          { id: 3, label: "Tools", icon: "tools" as const },
+          { id: 4, label: "Guardrails", icon: "guardrails" as const },
+          { id: 5, label: "Review", icon: "review" as const },
+        ].map((tabItem) => (
+          <button
+            type="button"
+            className={`wizard-step-tab ${step === tabItem.id ? "active" : step > tabItem.id ? "complete" : ""}`}
+            aria-current={step === tabItem.id ? "step" : undefined}
+            disabled={saving}
+            onClick={() => goToStep(tabItem.id)}
+            key={tabItem.label}
+          >
+            <WizardStepIcon name={tabItem.icon} />
+            <span>{tabItem.id}. {tabItem.label}</span>
+          </button>
+        ))}
+      </div><div className={`agent-wizard ${step === 3 ? "tools-step" : ""}`}>
     {step === 1 && <div className="wizard-fields compact-step"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><label>Initiative ID<input value={initiativeId} onChange={(event) => setInitiativeId(event.target.value)} placeholder="Optional initiative identifier" /></label><div className="model-picker" ref={modelPickerRef}><span className="model-picker-label">Model</span><button ref={modelTriggerRef} type="button" className="model-picker-trigger" aria-haspopup="listbox" aria-expanded={modelMenuOpen} onClick={() => { const opening = !modelMenuOpen; setModelMenuOpen(opening); if (opening) requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); }} onKeyDown={(event) => { if (event.key === "Escape") { setModelMenuOpen(false); return; } if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setModelMenuOpen(true); requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); } }}>{selectedModel.label}<span aria-hidden="true">⌄</span></button>{modelMenuOpen && <div className="model-picker-list" role="listbox" aria-label="Model" onKeyDown={handleModelListKey}>{availableModels.map((model) => <button type="button" role="option" aria-selected={model.available && modelId === model.id} key={model.id} disabled={!model.available} className={model.available ? "" : "unavailable"} onClick={() => { setModelId(model.id); setModelMenuOpen(false); modelTriggerRef.current?.focus(); }}><span>{model.label}</span>{!model.available && <small>Coming soon</small>}</button>)}</div>}</div></div>}
     {step === 2 && <div className="wizard-fields compact-step"><MarkdownPromptEditor label="System prompt" value={systemPrompt} onChange={setSystemPrompt} placeholder="Write system instructions using Markdown" /><MarkdownPromptEditor label="User prompt" value={userPrompt} onChange={setUserPrompt} placeholder="Write a reusable user prompt using Markdown" /></div>}
-    {step === 3 && <section className="agent-library-picker"><div><h2>Tool Library</h2><p>Select individual tools. A snapshot is copied into this agent.</p></div><div>{libraryTools.filter((tool) => tool.status === "available").map((tool) => <button type="button" disabled={tools.some((item) => item.tool_definition_id === tool.tool_definition_id)} onClick={() => addLibraryTool(tool)} key={tool.tool_definition_id}><span>{tool.display_name}</span><small>{tool.connection_type === "mcp" ? "MCP" : "Custom · LangChain"} · {tool.effect}</small></button>)}</div></section>}
-    {step === 3 && <div className="master-detail"><aside className="master-list"><div className="master-list-heading"><div><h2>Agent tools</h2><p>Configure copied tools.</p></div><button type="button" className="secondary-button" onClick={addTool}>New inline tool</button></div>{tools.length ? tools.map((tool, index) => <button type="button" className={selectedToolIndex === index ? "active" : ""} aria-pressed={selectedToolIndex === index} onClick={() => setSelectedToolIndex(index)} key={index}><span>{tool.name.trim() || `Untitled tool ${index + 1}`}</span><small>{tool.connection_type === "mcp" ? "MCP · saved only" : tool.enabled ? "Enabled" : "Disabled"}</small></button>) : <p className="master-empty">No tools added.</p>}</aside><section className="detail-panel">{selectedTool && selectedToolIndex !== null ? <div className="tool-editor"><button type="button" className="remove-button" onClick={removeSelectedTool}>Remove tool</button><label>Name<input value={selectedTool.name} onChange={(event) => updateTool(selectedToolIndex, "name", event.target.value)} /></label><label>Description<input value={selectedTool.description} onChange={(event) => updateTool(selectedToolIndex, "description", event.target.value)} /></label>{selectedTool.connection_type !== "mcp" && <PythonEditor value={selectedTool.source_code} onChange={(value) => updateTool(selectedToolIndex, "source_code", value)} />}<label>Approval policy<select value={selectedTool.approval_policy ?? "automatic"} onChange={(event) => updateTool(selectedToolIndex, "approval_policy", event.target.value)}><option value="automatic">Automatic</option><option value="ask">Ask (stored; not executed in v1)</option><option value="disabled">Disabled</option></select></label><label className="checkbox-label"><input type="checkbox" checked={selectedTool.enabled} onChange={(event) => updateTool(selectedToolIndex, "enabled", event.target.checked)} /> Enabled</label></div> : <p className="detail-empty">Select a tool or add one from the library.</p>}</section></div>}
-    {step === 4 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to configure.</p></div></div><button type="button" className={selectedGuardrail === "policy" ? "active" : ""} aria-pressed={selectedGuardrail === "policy"} onClick={() => setSelectedGuardrail("policy")}>Guardrail policy</button><button type="button" className={selectedGuardrail === "blocked" ? "active" : ""} aria-pressed={selectedGuardrail === "blocked"} onClick={() => setSelectedGuardrail("blocked")}>Blocked topics</button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}>Out-of-scope response</button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "policy" ? <label>Guardrail policy<textarea value={policyText} onChange={(event) => setPolicyText(event.target.value)} rows={9} placeholder="Describe which requests this agent may handle and any restrictions it must enforce." /><small>Every user message is checked against this policy before tools run. The policy is also applied to the final model response.</small></label> : selectedGuardrail === "blocked" ? <label>Blocked topics<textarea value={blockedTopics} onChange={(event) => setBlockedTopics(event.target.value)} rows={8} placeholder="Enter one topic per line" /><small>Requests related to any listed topic are blocked before normal chat or tools run.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={7} placeholder="Response returned when the guardrail blocks a request" /><small>This is the refusal shown after a block; it does not define what should be blocked.</small></label>}</section></div>}
-    {step === 5 && <div className="wizard-fields compact-step sharing-step"><div><h2>Sharing</h2><p>Agent sharing will be available in a future release.</p></div><label>Email ID<input type="email" disabled placeholder="person@example.com" /></label><span className="coming-soon-note">Coming soon — sharing is currently disabled.</span></div>}
-    {step === 6 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Initiative ID</dt><dd>{initiativeId || "None"}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Guardrail policy</dt><dd>{policyText || "None"}</dd><dt>Blocked topics</dt><dd>{blockedTopics || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd><dt>Sharing</dt><dd>Disabled</dd></dl></div>}
-    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}>{step === 1 ? "Cancel" : "Back"}</button>{step < 6 ? <button className="primary-button" onClick={next}>Continue</button> : <button className="primary-button" onClick={() => void save()} disabled={saving}>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</button>}</div>
-  </div></section></div>}</div>;
+    {step === 3 && (
+      <div className="agent-tooling-container">
+        <div className="agent-tooling-left">
+          <div className="tooling-section-header">
+            <div>
+              <span className="marketplace-category">AGENT TOOLING</span>
+              <h2>Configured Tools</h2>
+              <p>{tools.length} {tools.length === 1 ? "tool" : "tools"} attached to agent</p>
+            </div>
+            <button type="button" className="secondary-button" onClick={addTool}>
+              <MarketplaceActionIcon name="plus" />
+              <span>Inline tool</span>
+            </button>
+          </div>
+
+          {tools.length === 0 ? (
+            <div className="tooling-empty">
+              <div className="marketplace-icon" aria-hidden="true">🛠</div>
+              <p>No tools added to this agent yet</p>
+              <small>Click any tool from the Tool Library on the right to attach it to this agent, or click "+ Inline tool" above.</small>
+            </div>
+          ) : (
+            <div className="tooling-configured-content">
+              <div className="agent-tools-grid">
+                {tools.map((tool, index) => {
+                  const isConfigurable = tool.connection_type !== "mcp";
+                  return (
+                    <article
+                      key={index}
+                      role={isConfigurable ? "button" : undefined}
+                      tabIndex={isConfigurable ? 0 : undefined}
+                      className={`marketplace-card catalog-card agent-tool-card ${isConfigurable ? "configurable" : ""}`}
+                      onClick={() => isConfigurable && openToolConfig(index, tool)}
+                      onKeyDown={(e) => {
+                        if (isConfigurable && (e.key === "Enter" || e.key === " ")) {
+                          e.preventDefault();
+                          openToolConfig(index, tool);
+                        }
+                      }}
+                    >
+                      <div className="marketplace-icon">{tool.connection_type === "mcp" ? "MCP" : "PY"}</div>
+                      <div className="marketplace-card-content">
+                        <div className="agent-tool-card-top">
+                          <div className="agent-tool-card-heading">
+                            <span className="marketplace-category">{tool.connection_type === "mcp" ? "MCP" : "Custom"}</span>
+                            <h2>{tool.name.trim() || `Untitled tool ${index + 1}`}</h2>
+                          </div>
+                          <button
+                            type="button"
+                            className="marketplace-icon-button danger-icon"
+                            title="Remove tool from agent"
+                            aria-label={`Remove ${tool.name || "tool"} from agent`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTools((items) => items.filter((_, i) => i !== index));
+                            }}
+                          >
+                            <MarketplaceActionIcon name="trash" />
+                          </button>
+                        </div>
+                        {tool.description && <p className="agent-tool-card-desc">{tool.description}</p>}
+                        <div className="tool-card-footer">
+                          <div className="tool-badges">
+                            <span className={`status-pill ${tool.enabled ? "available" : "unavailable"}`}>
+                              {tool.enabled ? "Enabled" : "Disabled"}
+                            </span>
+                            {tool.approval_policy && (
+                              <span className="approval-pill">{tool.approval_policy}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="agent-tooling-right">
+          <div className="tooling-section-header">
+            <div>
+              <span className="marketplace-category">TOOL LIBRARY</span>
+              <h2>Discover & Add Tools</h2>
+              <p>Classified by MCP server · Click any tool to add to agent</p>
+            </div>
+          </div>
+
+          <div className="tool-library-toolbar-controls">
+            <label className="catalog-search marketplace-search">
+              <span className="sr-only">Search tools or MCP servers</span>
+              <input
+                type="search"
+                placeholder="Search tools or MCP servers…"
+                value={toolSearch}
+                onChange={(e) => setToolSearch(e.target.value)}
+              />
+            </label>
+            <label className="sr-only" htmlFor="mcp-server-filter">Filter by MCP server</label>
+            <select
+              id="mcp-server-filter"
+              value={serverFilter}
+              onChange={(e) => setServerFilter(e.target.value)}
+            >
+              <option value="">All MCP Servers & Sources</option>
+              {uniqueServers.map((s) => (
+                <option value={s} key={s}>{s}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="tool-library-scroll-area">
+            {mcpServerGroups.length === 0 ? (
+              <p className="catalog-empty">
+                {toolSearch.trim() || serverFilter ? "No tools match your search criteria." : "No tools available in the library."}
+              </p>
+            ) : (
+              mcpServerGroups.map((group) => (
+                <div key={group.key} className="tool-library-group-section">
+                  <div className="tool-group-header">
+                    <div className="tool-group-title">
+                      <span className="marketplace-category">{group.serverName}</span>
+                      <span className="tool-group-badge">{group.connectionType === "mcp" ? "MCP" : "Custom"}</span>
+                    </div>
+                    <span className="tool-group-count">{group.tools.length} {group.tools.length === 1 ? "tool" : "tools"}</span>
+                  </div>
+                  <div className="marketplace-grid tool-library-grid">
+                    {group.tools.map((tool) => {
+                      const isAdded = tools.some((item) => item.tool_definition_id === tool.tool_definition_id);
+                      const canConfigure = isAdded && tool.connection_type !== "mcp";
+                      return (
+                        <article
+                          key={tool.tool_definition_id}
+                          className={`marketplace-card catalog-card tool-card-button ${isAdded ? "already-added" : ""}`}
+                        >
+                          <div className="marketplace-icon">{tool.connection_type === "mcp" ? "MCP" : "PY"}</div>
+                          <div className="marketplace-card-content">
+                            <h2 className="tool-card-title" title={tool.display_name}>{tool.display_name}</h2>
+                            <p className="tool-card-description" title={tool.description}>{tool.description}</p>
+                          </div>
+                          <button
+                            type="button"
+                            className={`tool-library-card-action ${isAdded ? "added" : ""}`}
+                            disabled={isAdded && !canConfigure}
+                            onClick={() => handleToolClick(tool)}
+                            aria-label={isAdded ? canConfigure ? `Configure ${tool.display_name}` : `${tool.display_name} already added` : `Add ${tool.display_name}`}
+                            title={isAdded ? canConfigure ? "Configure tool" : "Already added" : "Add tool"}
+                          >
+                            <MarketplaceActionIcon name={isAdded ? "check" : "plus"} />
+                          </button>
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+    {step === 4 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to configure.</p></div></div><button type="button" className={selectedGuardrail === "policy" ? "active" : ""} aria-pressed={selectedGuardrail === "policy"} onClick={() => setSelectedGuardrail("policy")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg><span>Guardrail policy</span></button><button type="button" className={selectedGuardrail === "blocked" ? "active" : ""} aria-pressed={selectedGuardrail === "blocked"} onClick={() => setSelectedGuardrail("blocked")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg><span>Blocked topics</span></button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg><span>Out-of-scope response</span></button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "policy" ? <label>Guardrail policy<textarea value={policyText} onChange={(event) => setPolicyText(event.target.value)} rows={9} placeholder="Describe which requests this agent may handle and any restrictions it must enforce." /><small>Every user message is checked against this policy before tools run. The policy is also applied to the final model response.</small></label> : selectedGuardrail === "blocked" ? <label>Blocked topics<textarea value={blockedTopics} onChange={(event) => setBlockedTopics(event.target.value)} rows={8} placeholder="Enter one topic per line" /><small>Requests related to any listed topic are blocked before normal chat or tools run.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={7} placeholder="Response returned when the guardrail blocks a request" /><small>This is the refusal shown after a block; it does not define what should be blocked.</small></label>}</section></div>}
+    {step === 5 && <div className="review"><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><dl><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Initiative ID</dt><dd>{initiativeId || "None"}</dd><dt>Model</dt><dd>{selectedModel.label}</dd><dt>System prompt</dt><dd className="review-markdown">{systemPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{systemPrompt}</ReactMarkdown> : "None"}</dd><dt>User prompt</dt><dd className="review-markdown">{userPrompt ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{userPrompt}</ReactMarkdown> : "None"}</dd><dt>Tools</dt><dd>{tools.length || "None"}</dd><dt>Guardrail policy</dt><dd>{policyText || "None"}</dd><dt>Blocked topics</dt><dd>{blockedTopics || "None"}</dd><dt>Fallback</dt><dd>{fallback || "None"}</dd></dl></div>}
+    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}><MarketplaceActionIcon name={step === 1 ? "close" : "arrow-left"} /><span>{step === 1 ? "Cancel" : "Back"}</span></button>{step < 5 ? <button className="primary-button" onClick={next}><span>Continue</span><MarketplaceActionIcon name="arrow-right" /></button> : <button className="primary-button" onClick={() => void save()} disabled={saving}><MarketplaceActionIcon name={editingAgent ? "save" : "plus"} /><span>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</span></button>}</div>
+  </div>{toolDraft && <div className="tool-config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeToolConfig(); }}><section className="marketplace-dialog tool-config-dialog" role="dialog" aria-modal="true" aria-labelledby="tool-config-title"><div className="agent-modal-header"><div><p className="eyebrow">{toolDraft.tool.tool_definition_id ? "CUSTOM TOOL" : "INLINE TOOL"}</p><h1 id="tool-config-title">{toolDraft.index === null ? "New inline tool" : `Configure ${toolDraft.tool.name || "tool"}`}</h1></div><button type="button" className="marketplace-icon-button close-icon" disabled={toolTesting} onClick={closeToolConfig} aria-label="Close tool configuration" title="Close"><MarketplaceActionIcon name="close" /></button></div><div className="tool-modal-tabs" role="tablist" aria-label="Tool configuration"><button type="button" role="tab" aria-selected={toolConfigTab === "configure"} className={toolConfigTab === "configure" ? "active" : ""} onClick={() => setToolConfigTab("configure")}>Configure</button>{!toolDraft.tool.tool_definition_id && <button type="button" role="tab" aria-selected={toolConfigTab === "test"} className={toolConfigTab === "test" ? "active" : ""} onClick={() => setToolConfigTab("test")}>Test tool</button>}</div>{toolConfigTab === "configure" || toolDraft.tool.tool_definition_id ? <form className="marketplace-form tool-config-form" onSubmit={saveToolConfig}><label>Function name<input required value={toolDraft.tool.name} onChange={(event) => updateToolDraft("name", event.target.value)} /></label><label>Description<textarea required rows={3} value={toolDraft.tool.description} onChange={(event) => updateToolDraft("description", event.target.value)} /></label><PythonEditor value={toolDraft.tool.source_code} onChange={(value) => updateToolDraft("source_code", value)} /><label>Approval policy<select value={toolDraft.tool.approval_policy ?? "automatic"} onChange={(event) => updateToolDraft("approval_policy", event.target.value)}><option value="automatic">Automatic</option><option value="ask">Ask (stored; not executed in v1)</option><option value="disabled">Disabled</option></select></label><label className="checkbox-label"><input type="checkbox" checked={toolDraft.tool.enabled} onChange={(event) => updateToolDraft("enabled", event.target.checked)} />Enabled</label>{toolDraftError && <div className="error-banner" role="alert">{toolDraftError}</div>}<div className="tool-config-actions"><button type="button" className="secondary-button" onClick={closeToolConfig}>Cancel</button><button type="submit" className="primary-button"><MarketplaceActionIcon name="save" /><span>Save tool</span></button></div></form> : <form className="tool-modal-panel tool-test-panel inline-tool-test-panel" role="tabpanel" onSubmit={runInlineToolTest}><div className="tool-test-guide"><strong>Test the current unsaved code</strong><p>Provide a JSON object matching the function arguments. Testing does not save the tool.</p></div><label>Arguments JSON<textarea rows={9} aria-invalid={Boolean(inlineTestInputError)} value={inlineTestInput} onChange={(event) => { setInlineTestInput(event.target.value); setInlineTestInputError(""); }} />{inlineTestInputError && <span className="field-error" role="alert">{inlineTestInputError}</span>}</label><button className="primary-button inline-test-button" disabled={toolTesting}>{toolTesting ? <i className="loading-circle small" aria-hidden="true" /> : <MarketplaceActionIcon name="play" />}<span>{toolTesting ? "Running…" : "Run test"}</span></button>{inlineTestResult && <div className={`test-result ${inlineTestResult.outcome}`}><strong>{inlineTestResult.outcome} · {inlineTestResult.duration_ms}ms</strong><pre>{JSON.stringify(inlineTestResult.output ?? inlineTestResult.error, null, 2)}</pre></div>}</form>}</section></div>}</section></div>}</div>;
 }
 
 export default function App() {

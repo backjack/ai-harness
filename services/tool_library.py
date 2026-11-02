@@ -369,3 +369,33 @@ async def test_tool(tool_definition_id: str, arguments: dict[str, Any], invoked_
     except Error as exc:
         raise _database_error("Tool execution audit failed", exc) from exc
     return {"execution_id": execution_id, "outcome": outcome, "output": safe_output, "error": error, "duration_ms": duration}
+
+
+async def test_inline_tool(name: str, description: str, source_code: str,
+                           arguments: dict[str, Any]) -> dict[str, Any]:
+    """Execute an unsaved inline Python tool without persisting an audit record."""
+    started = time.monotonic()
+    outcome, error, output = "success", None, None
+    record = {
+        "name": name,
+        "description": description,
+        "source_code": source_code,
+        "enabled": True,
+        "connection_type": "custom_langchain",
+    }
+    try:
+        validate_tool_definitions([record])
+        output = build_langchain_tools([record])[0].invoke(arguments)
+    except Exception as exc:
+        logger.exception("Inline tool preview failed for %s", name)
+        outcome, error, output = "error", _exception_summary(exc), None
+    duration = int((time.monotonic() - started) * 1000)
+    serialized_output = json.dumps(output, default=str) if output is not None else None
+    safe_output = (
+        json.loads(serialized_output)
+        if serialized_output is not None and len(serialized_output) <= 20000
+        else {"truncated": True, "preview": (serialized_output or "")[:19000]}
+        if serialized_output is not None
+        else None
+    )
+    return {"outcome": outcome, "output": safe_output, "error": error, "duration_ms": duration}
