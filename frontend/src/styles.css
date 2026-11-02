@@ -350,3 +350,50 @@
 }
 .typing-bubble span:nth-child(2) { animation-delay:.15s; }
 .typing-bubble span:nth-child(3) { animation-delay:.3s; }
+
+/* Keep Tool Library modal and filtered-card widths stable on larger screens. */
+.marketplace-dialog:has(> .marketplace-form .python-editor) { width:min(832px,100%); }
+.custom-tool-detail-dialog { width:min(936px,100%); }
+.marketplace-tools-surface .tool-library-grid { grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr)); }
+
+/* Shared alignment and scrolling for centered floating modals. */
+.marketplace-dialog {
+  display:flex;
+  flex-direction:column;
+  padding:26px 0;
+  overflow:hidden;
+  border:1px solid var(--line);
+  border-radius:18px;
+  background-clip:padding-box;
+}
+.marketplace-dialog > .agent-modal-header,
+.marketplace-dialog > .marketplace-form,
+.marketplace-dialog > .tool-modal-tabs,
+.marketplace-dialog > .tool-modal-panel {
+  width:95%;
+  max-width:none;
+  margin-right:auto;
+  margin-left:auto;
+}
+.marketplace-dialog > .marketplace-form {
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable;
+}
+@media (max-width:760px) {
+  .marketplace-dialog { padding:18px 0; }
+}
+
+/* Give tool configuration room for source code without widening its outer form. */
+.marketplace-dialog.tool-config-dialog { width:min(988px,100%); }
+.tool-config-dialog > .marketplace-form { overflow-x:hidden; }
+.tool-config-dialog .python-editor,
+.tool-config-dialog .cm-editor,
+.tool-config-dialog .cm-scroller {
+  min-width:0;
+  max-width:100%;
+}
+.tool-config-dialog .cm-editor { width:100%; }
+.tool-config-dialog .cm-scroller { overflow:auto; }

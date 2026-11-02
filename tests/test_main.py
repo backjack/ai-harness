@@ -14,6 +14,8 @@ from controllers.service_status import _classify_message
 from services.analytics import get_analytics_report
 from services.agent_repository import _decode_agent, _serialize_agent_values, update_agent as update_stored_agent
 from services.chat_events import ChatEventSink
+from services.conversation_agent import TOOL_USE_SYSTEM_PROMPT
+from services.langchain_tracing import MAX_TOOL_CALLS, LangChainTrace, invoke_model_with_tools
 from services.mcp_client import call_mcp_tool as execute_mcp_call
 from services.tool_library import discover_source, test_inline_tool as execute_inline_tool, test_tool as execute_library_tool
 from utils.config import get_config
@@ -30,7 +32,7 @@ from services.tool_runtime import (
     build_langchain_tools,
     validate_tool_definitions,
 )
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 
 client = TestClient(app)
@@ -2142,3 +2144,116 @@ def test_model_execution_runs_tool_call_then_returns_final_answer(monkeypatch, c
     assert tool_message["tool_name"] == "doublePrice"
     assert tool_message["arguments"] == {"stock_price": 12.5}
     assert tool_message["result"] == 25.0
+
+
+def test_tool_loop_allows_ten_calls_then_a_final_response() -> None:
+    calls: list[int] = []
+    events: list[dict[str, object]] = []
+
+    class Tool:
+        name = "lookup"
+
+        async def ainvoke(self, arguments: dict[str, int], config: object | None = None) -> int:
+            calls.append(arguments["value"])
+            return arguments["value"]
+
+    class Model:
+        invocation_count = 0
+
+        async def ainvoke(self, messages: list[object], config: object | None = None) -> AIMessage:
+            self.invocation_count += 1
+            if self.invocation_count <= MAX_TOOL_CALLS:
+                return AIMessage(content="", tool_calls=[{
+                    "name": "lookup",
+                    "args": {"value": self.invocation_count},
+                    "id": f"call-{self.invocation_count}",
+                }])
+            assert isinstance(messages[-1], SystemMessage)
+            assert "budget is exhausted" in str(messages[-1].content)
+            return AIMessage(content="Final answer")
+
+    response, _, _ = asyncio.run(invoke_model_with_tools(
+        chat_model=Model(),
+        messages=[HumanMessage(content="Use the tools")],
+        tools=[Tool()],
+        trace=LangChainTrace("openai", "test", events.append),
+        logger=logging.getLogger("test.tool_loop"),
+    ))
+
+    assert response.content == "Final answer"
+    assert calls == list(range(1, 11))
+    assert any(event["event"] == "runtime.tool_call_limit.reached" for event in events)
+    assert f"maximum budget of {MAX_TOOL_CALLS}" in TOOL_USE_SYSTEM_PROMPT
+    assert "minimum number of tool calls" in TOOL_USE_SYSTEM_PROMPT
+
+
+def test_tool_loop_rejects_an_over_budget_batch_atomically() -> None:
+    calls: list[int] = []
+    events: list[dict[str, object]] = []
+
+    class Tool:
+        name = "lookup"
+
+        async def ainvoke(self, arguments: dict[str, int], config: object | None = None) -> int:
+            calls.append(arguments["value"])
+            return arguments["value"]
+
+    class Model:
+        async def ainvoke(self, messages: list[object], config: object | None = None) -> AIMessage:
+            return AIMessage(content="", tool_calls=[
+                {"name": "lookup", "args": {"value": 1}, "id": "call-1"},
+                {"name": "lookup", "args": {"value": 2}, "id": "call-2"},
+            ])
+
+    with pytest.raises(RuntimeError, match="Tool call limit of 1 exceeded"):
+        asyncio.run(invoke_model_with_tools(
+            chat_model=Model(),
+            messages=[HumanMessage(content="Use the tools")],
+            tools=[Tool()],
+            trace=LangChainTrace("openai", "test", events.append),
+            logger=logging.getLogger("test.tool_loop"),
+            max_tool_calls=1,
+        ))
+
+    assert calls == []
+    limit_event = next(event for event in events if event["event"] == "runtime.tool_call_limit.exceeded")
+    assert limit_event["tool_call_count"] == 0
+    assert limit_event["requested_tool_calls"] == 2
+    assert limit_event["max_tool_calls"] == 1
+
+
+@pytest.mark.parametrize("tool_available", [False, True])
+def test_failed_and_unavailable_tool_attempts_count_toward_limit(tool_available: bool) -> None:
+    events: list[dict[str, object]] = []
+
+    class FailingTool:
+        name = "lookup"
+
+        async def ainvoke(self, arguments: dict[str, object], config: object | None = None) -> None:
+            raise RuntimeError("tool failed")
+
+    class Model:
+        invocation_count = 0
+
+        async def ainvoke(self, messages: list[object], config: object | None = None) -> AIMessage:
+            self.invocation_count += 1
+            return AIMessage(content="", tool_calls=[{
+                "name": "lookup",
+                "args": {},
+                "id": f"call-{self.invocation_count}",
+            }])
+
+    with pytest.raises(RuntimeError, match="Tool call limit of 1 exceeded"):
+        asyncio.run(invoke_model_with_tools(
+            chat_model=Model(),
+            messages=[HumanMessage(content="Use the tool")],
+            tools=[FailingTool()] if tool_available else [],
+            trace=LangChainTrace("openai", "test", events.append),
+            logger=logging.getLogger("test.tool_loop"),
+            max_tool_calls=1,
+        ))
+
+    expected_event = "runtime.tool.invoke.error" if tool_available else "runtime.tool.invoke.unavailable"
+    assert any(event["event"] == expected_event for event in events)
+    limit_event = next(event for event in events if event["event"] == "runtime.tool_call_limit.exceeded")
+    assert limit_event["tool_call_count"] == 1

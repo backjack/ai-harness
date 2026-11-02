@@ -7,10 +7,12 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
 
 trace_logger = logging.getLogger("ai_harness.langchain_trace")
+MAX_TOOL_CALLS = 10
+TOOL_BUDGET_EXHAUSTED_PROMPT = "The tool-call budget is exhausted. Do not call any more tools. Use the available conversation context and tool results to provide the best possible final answer now."
 
 
 def _json_default(value: Any) -> Any:
@@ -113,14 +115,23 @@ async def invoke_model_with_tools(
     tools: list[Any],
     trace: LangChainTrace,
     logger: logging.Logger,
-    max_iterations: int = 5,
+    max_tool_calls: int = MAX_TOOL_CALLS,
 ) -> tuple[Any, int, int]:
     """Invoke a bound chat model, run requested tools, and trace every step."""
     input_tokens = output_tokens = 0
+    iteration = 0
+    tool_call_count = 0
     tools_by_name = {tool.name: tool for tool in tools}
 
-    for iteration in range(1, max_iterations + 1):
-        trace.event("runtime.model.invoke.start", iteration=iteration, messages=messages)
+    while True:
+        iteration += 1
+        trace.event(
+            "runtime.model.invoke.start",
+            iteration=iteration,
+            tool_call_count=tool_call_count,
+            max_tool_calls=max_tool_calls,
+            messages=messages,
+        )
         started_at = monotonic()
         try:
             response = await chat_model.ainvoke(messages, config=trace.config)
@@ -149,14 +160,28 @@ async def invoke_model_with_tools(
         if not tool_calls:
             return response, input_tokens, output_tokens
 
+        requested_tool_calls = len(tool_calls)
+        if tool_call_count + requested_tool_calls > max_tool_calls:
+            trace.event(
+                "runtime.tool_call_limit.exceeded",
+                iteration=iteration,
+                max_tool_calls=max_tool_calls,
+                tool_call_count=tool_call_count,
+                requested_tool_calls=requested_tool_calls,
+            )
+            raise RuntimeError(f"Tool call limit of {max_tool_calls} exceeded")
+
         messages.append(response)
         for call in tool_calls:
+            tool_call_count += 1
             tool_name = call["name"]
             arguments = call.get("args", {})
             tool = tools_by_name.get(tool_name)
             trace.event(
                 "runtime.tool.invoke.start",
                 iteration=iteration,
+                tool_call_number=tool_call_count,
+                max_tool_calls=max_tool_calls,
                 tool_call_id=call["id"],
                 tool_name=tool_name,
                 arguments=arguments,
@@ -195,8 +220,6 @@ async def invoke_model_with_tools(
                 result=result,
                 duration_ms=round((monotonic() - started_at) * 1000, 2),
             )
-            from langchain_core.messages import ToolMessage
-
             tool_message = ToolMessage(content=str(result), tool_call_id=call["id"])
             messages.append(tool_message)
             trace.event(
@@ -208,6 +231,11 @@ async def invoke_model_with_tools(
                 result=result,
                 message=tool_message,
             )
-
-    trace.event("runtime.tool_call_limit.exceeded", max_iterations=max_iterations)
-    raise RuntimeError("Tool call limit exceeded")
+        if tool_call_count == max_tool_calls:
+            messages.append(SystemMessage(content=TOOL_BUDGET_EXHAUSTED_PROMPT))
+            trace.event(
+                "runtime.tool_call_limit.reached",
+                iteration=iteration,
+                max_tool_calls=max_tool_calls,
+                tool_call_count=tool_call_count,
+            )
