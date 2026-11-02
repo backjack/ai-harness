@@ -85,6 +85,8 @@ export type AnalyticsMetrics = {
 
 export type ModelAnalytics = AnalyticsMetrics & { model_id: string };
 
+export type DailyModelAnalytics = ModelAnalytics & { date: string };
+
 export type AgentAnalytics = AnalyticsMetrics & {
   agent_id: string;
   agent_name: string | null;
@@ -95,6 +97,7 @@ export type AnalyticsReport = {
   summary: AnalyticsMetrics;
   by_model: ModelAnalytics[];
   by_agent: AgentAnalytics[];
+  daily_by_model: DailyModelAnalytics[];
 };
 
 export type UserProfile = {

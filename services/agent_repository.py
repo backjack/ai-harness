@@ -298,11 +298,26 @@ def get_analytics_usage(*, lookback_days: int) -> dict[str, list[dict[str, Any]]
                     (lookback_days,),
                 )
                 by_agent = cursor.fetchall()
+                cursor.execute(
+                    "SELECT DATE(aci.created_at) AS usage_date, aci.model_id, "
+                    "COUNT(*) AS interaction_count, "
+                    "COALESCE(SUM(aci.input_token_count), 0) AS input_tokens, "
+                    "COALESCE(SUM(aci.output_token_count), 0) AS output_tokens"
+                    + base_query
+                    + "GROUP BY DATE(aci.created_at), aci.model_id "
+                    "ORDER BY usage_date, aci.model_id",
+                    (lookback_days,),
+                )
+                daily_by_model = cursor.fetchall()
     except Error as exc:
         logger.exception("Analytics usage lookup failed")
         raise DatabaseUnavailableError("Analytics usage lookup failed") from exc
 
-    return {"by_model": by_model, "by_agent": by_agent}
+    return {
+        "by_model": by_model,
+        "by_agent": by_agent,
+        "daily_by_model": daily_by_model,
+    }
 
 
 def record_successful_chat(

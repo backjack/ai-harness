@@ -52,6 +52,12 @@ def get_analytics_report() -> dict[str, Any]:
     """Return 30-day usage totals grouped by model and by agent/model."""
     usage = get_analytics_usage(lookback_days=LOOKBACK_DAYS)
     by_model = [_usage_row(row) for row in usage["by_model"]]
+    daily_by_model: list[dict[str, Any]] = []
+    for row in usage.get("daily_by_model", []):
+        daily_row = _usage_row(row)
+        usage_date = row["usage_date"]
+        daily_row["date"] = usage_date.isoformat() if hasattr(usage_date, "isoformat") else str(usage_date)
+        daily_by_model.append(daily_row)
     by_agent: list[dict[str, Any]] = []
     agent_totals: dict[str, dict[str, Any]] = {}
     for row in usage["by_agent"]:
@@ -122,4 +128,5 @@ def get_analytics_report() -> dict[str, Any]:
         "summary": summary,
         "by_model": by_model,
         "by_agent": by_agent,
+        "daily_by_model": daily_by_model,
     }

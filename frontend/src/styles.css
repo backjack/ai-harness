@@ -397,3 +397,21 @@
 }
 .tool-config-dialog .cm-editor { width:100%; }
 .tool-config-dialog .cm-scroller { overflow:auto; }
+
+.analytics-trend-filters { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin:0 0 18px; padding:14px 16px; border:1px solid var(--line); border-radius:12px; background:var(--paper); }
+.analytics-trend-filters > label { display:grid; flex:0 0 auto; gap:6px; color:var(--navy); font-size:13px; font-weight:700; }
+.analytics-trend-filters select { min-width:150px; padding:9px 30px 9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--paper); color:var(--ink); }
+.analytics-trend-filters fieldset { display:flex; align-items:center; justify-content:flex-end; gap:12px; min-width:0; margin:0; padding:0; border:0; }
+.analytics-trend-filters legend { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
+.analytics-model-filters { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:7px; }
+.analytics-model-filters label { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border:1px solid var(--line); border-radius:999px; background:var(--subtle); color:var(--navy); font-size:12px; font-weight:700; cursor:pointer; }
+.analytics-model-filters input { width:auto; margin:0; accent-color:var(--blue); }
+.analytics-filter-actions { display:flex; flex:0 0 auto; gap:6px; }
+.analytics-filter-actions button { padding:6px 8px; border:0; border-radius:7px; background:transparent; color:var(--blue); font-size:12px; font-weight:700; }
+.analytics-filter-actions button:hover,.analytics-filter-actions button:focus-visible { background:#edf3fa; outline:0; }
+.analytics-trend-chart { grid-column:1/-1; min-width:0; }
+@media (max-width:760px) {
+  .analytics-trend-filters,.analytics-trend-filters fieldset { align-items:stretch; flex-direction:column; }
+  .analytics-model-filters { justify-content:flex-start; }
+  .analytics-filter-actions { justify-content:flex-start; }
+}

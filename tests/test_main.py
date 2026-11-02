@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import io
 import json
 import logging
@@ -347,6 +347,10 @@ def test_analytics_reports_luna_costs_and_unpriced_models(monkeypatch) -> None:
                 {"agent_id": "a", "agent_name": "Luna", "model_id": "gpt-5.6-luna", "interaction_count": 2, "input_tokens": 1_000_000, "output_tokens": 500_000},
                 {"agent_id": "b", "agent_name": "Legacy", "model_id": "unsupported-model", "interaction_count": 1, "input_tokens": 10, "output_tokens": 20},
             ],
+            "daily_by_model": [
+                {"usage_date": date(2026, 11, 2), "model_id": "gpt-5.6-luna", "interaction_count": 2, "input_tokens": 1_000_000, "output_tokens": 500_000},
+                {"usage_date": date(2026, 11, 2), "model_id": "unsupported-model", "interaction_count": 1, "input_tokens": 10, "output_tokens": 20},
+            ],
         },
     )
 
@@ -365,6 +369,9 @@ def test_analytics_reports_luna_costs_and_unpriced_models(monkeypatch) -> None:
     assert report["by_model"][1]["cost_status"] == "unavailable"
     assert report["by_agent"][0]["agent_name"] == "Luna"
     assert report["by_agent"][0]["cost_usd"] == 0.8
+    assert report["daily_by_model"][0]["date"] == "2026-11-02"
+    assert report["daily_by_model"][0]["cost_usd"] == 0.8
+    assert report["daily_by_model"][1]["cost_status"] == "unavailable"
 
 
 def test_analytics_calculates_gpt_5_4_mini_costs(monkeypatch) -> None:

@@ -560,10 +560,50 @@ function AnalyticsChart({ title, categories, series, valueSuffix }: { title: str
   return <article className="analytics-chart">{categories.length ? <HighchartsReact highcharts={Highcharts} options={columnChart(title, categories, series, valueSuffix)} /> : <><h2>{title}</h2><p className="analytics-empty">No priced usage is available for this chart.</p></>}</article>;
 }
 
+const ANALYTICS_MODEL_COLORS = ["#2A5A94", "#CA714C", "#0D2B49", "#10A37F", "#8B5CF6", "#D4B779"];
+
+function AnalyticsTrendChart({ report, selectedModels, days }: { report: AnalyticsReport; selectedModels: string[]; days: 7 | 14 | 30 }) {
+  const cutoff = new Date();
+  cutoff.setUTCHours(0, 0, 0, 0);
+  cutoff.setUTCDate(cutoff.getUTCDate() - days + 1);
+  const selected = new Set(selectedModels);
+  const rows = report.daily_by_model.filter((row) => selected.has(row.model_id) && Date.parse(`${row.date}T00:00:00Z`) >= cutoff.getTime());
+  const series: Highcharts.SeriesOptionsType[] = [];
+
+  selectedModels.forEach((modelId, index) => {
+    const modelRows = rows.filter((row) => row.model_id === modelId).sort((left, right) => left.date.localeCompare(right.date));
+    if (!modelRows.length) return;
+    const color = ANALYTICS_MODEL_COLORS[index % ANALYTICS_MODEL_COLORS.length];
+    series.push({ type: "line", name: `${modelId} · Tokens`, color, yAxis: 0, data: modelRows.map((row) => [Date.parse(`${row.date}T00:00:00Z`), row.input_tokens + row.output_tokens]), marker: { enabled: true, radius: 3 }, tooltip: { valueDecimals: 0, valueSuffix: " tokens" } });
+    const pricedRows = modelRows.filter((row) => row.cost_usd !== null);
+    if (pricedRows.length) series.push({ type: "line", name: `${modelId} · Cost`, color, dashStyle: "Dash", yAxis: 1, data: pricedRows.map((row) => [Date.parse(`${row.date}T00:00:00Z`), row.cost_usd ?? 0]), marker: { enabled: true, radius: 3 }, tooltip: { valueDecimals: 6, valuePrefix: "$" } });
+  });
+
+  const options: Highcharts.Options = {
+    chart: { type: "line", backgroundColor: "transparent", height: 390 },
+    title: { text: "Daily token usage and estimated cost by model", align: "left", style: { color: "#0D2B49", fontSize: "18px", fontWeight: "700" } },
+    xAxis: { type: "datetime", title: { text: "Date" }, labels: { format: "{value:%b %e}", style: { color: "#5f666b" } }, crosshair: true },
+    yAxis: [
+      { min: 0, title: { text: "Total tokens" }, labels: { style: { color: "#858A8E" } } },
+      { min: 0, title: { text: "Estimated cost (USD)" }, labels: { format: "${value:.4f}", style: { color: "#858A8E" } }, opposite: true },
+    ],
+    legend: { enabled: true },
+    tooltip: { shared: true, xDateFormat: "%b %e, %Y" },
+    credits: { enabled: false },
+    series,
+  };
+
+  return <article className="analytics-chart analytics-trend-chart">{series.length ? <HighchartsReact highcharts={Highcharts} options={options} /> : <><h2>Daily token usage and estimated cost by model</h2><p className="analytics-empty">No usage is available for the selected models and date range.</p></>}</article>;
+}
+
 function AnalyticsDashboard() {
   const [report, setReport] = useState<AnalyticsReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [trendDays, setTrendDays] = useState<7 | 14 | 30>(30);
+  const [selectedModels, setSelectedModels] = useState<string[]>([ "gpt-4.1-mini",
+  "gpt-5.4-mini"]);
+  const initializedModels = useRef(false);
 
   function load() {
     setLoading(true); setLoadError("");
@@ -571,6 +611,13 @@ function AnalyticsDashboard() {
   }
 
   useEffect(load, []);
+
+  useEffect(() => {
+    if (!report) return;
+    const availableModels = report.by_model.map((row) => row.model_id);
+    setSelectedModels((current) => initializedModels.current ? current.filter((modelId) => availableModels.includes(modelId)) : availableModels);
+    initializedModels.current = true;
+  }, [report]);
 
   if (loading) return <section className="content-page analytics-state" aria-live="polite"><p>Loading analytics…</p></section>;
   if (loadError) return <section className="content-page analytics-state"><div className="error-banner">{loadError}</div><button className="primary-button" onClick={load}>Retry</button></section>;
@@ -581,7 +628,7 @@ function AnalyticsDashboard() {
   const formatNumber = (value: number) => value.toLocaleString("en-US");
   const costLabel = report.summary.cost_usd === null ? report.summary.cost_status : `$${report.summary.cost_usd.toFixed(6)}`;
 
-  return <section className="content-page"><header className="content-page-header"><div><p className="eyebrow">LAST {report.lookback_days} DAYS</p><h1>Analytics</h1><p>Model usage, agent activity, token consumption, and estimated OpenAI cost.</p></div><button className="secondary-button" onClick={load}>Refresh</button></header><div className="analytics-summary"><article><span>Interactions</span><strong>{formatNumber(report.summary.interaction_count)}</strong></article><article><span>Input tokens</span><strong>{formatNumber(report.summary.input_tokens)}</strong></article><article><span>Output tokens</span><strong>{formatNumber(report.summary.output_tokens)}</strong></article><article><span>Estimated cost</span><strong className={report.summary.cost_usd === null ? "cost-unavailable" : ""}>{costLabel}</strong></article></div>{report.by_model.some((row) => row.cost_usd === null) && <p className="analytics-note">Cost charts omit models without configured pricing; unavailable cost is not treated as zero.</p>}<div className="analytics-grid"><AnalyticsChart title="Cost by model" categories={pricedModels.map((row) => row.model_id)} series={[{ name: "Cost", data: pricedModels.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Cost by agent" categories={pricedAgents.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Cost", data: pricedAgents.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Token usage by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Input tokens", data: report.by_model.map((row) => row.input_tokens) }, { name: "Output tokens", data: report.by_model.map((row) => row.output_tokens) }]} /><AnalyticsChart title="Interactions by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Interactions", data: report.by_model.map((row) => row.interaction_count) }]} /><AnalyticsChart title="Interactions by agent" categories={report.by_agent.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Interactions", data: report.by_agent.map((row) => row.interaction_count) }]} /></div></section>;
+  return <section className="content-page"><header className="content-page-header"><div><p className="eyebrow">LAST {report.lookback_days} DAYS</p><h1>Analytics</h1><p>Model usage, agent activity, token consumption, and estimated OpenAI cost.</p></div><button className="secondary-button" onClick={load}>Refresh</button></header><div className="analytics-summary"><article><span>Interactions</span><strong>{formatNumber(report.summary.interaction_count)}</strong></article><article><span>Input tokens</span><strong>{formatNumber(report.summary.input_tokens)}</strong></article><article><span>Output tokens</span><strong>{formatNumber(report.summary.output_tokens)}</strong></article><article><span>Estimated cost</span><strong className={report.summary.cost_usd === null ? "cost-unavailable" : ""}>{costLabel}</strong></article></div>{report.by_model.some((row) => row.cost_usd === null) && <p className="analytics-note">Cost charts omit models without configured pricing; unavailable cost is not treated as zero.</p>}<div className="analytics-trend-filters"><label>Date range<select value={trendDays} onChange={(event) => setTrendDays(Number(event.target.value) as 7 | 14 | 30)}><option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option></select></label><fieldset><legend>Models</legend><div className="analytics-model-filters">{report.by_model.map((row) => <label key={row.model_id}><input type="checkbox" checked={selectedModels.includes(row.model_id)} onChange={(event) => setSelectedModels((current) => event.target.checked ? [...current, row.model_id] : current.filter((modelId) => modelId !== row.model_id))} /><span>{row.model_id}</span></label>)}</div><div className="analytics-filter-actions"><button type="button" onClick={() => setSelectedModels(report.by_model.map((row) => row.model_id))}>Select all</button><button type="button" onClick={() => setSelectedModels([])}>Clear</button></div></fieldset></div><div className="analytics-grid"><AnalyticsTrendChart report={report} selectedModels={selectedModels} days={trendDays} /><AnalyticsChart title="Cost by model" categories={pricedModels.map((row) => row.model_id)} series={[{ name: "Cost", data: pricedModels.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Cost by agent" categories={pricedAgents.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Cost", data: pricedAgents.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Token usage by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Input tokens", data: report.by_model.map((row) => row.input_tokens) }, { name: "Output tokens", data: report.by_model.map((row) => row.output_tokens) }]} /><AnalyticsChart title="Interactions by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Interactions", data: report.by_model.map((row) => row.interaction_count) }]} /><AnalyticsChart title="Interactions by agent" categories={report.by_agent.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Interactions", data: report.by_agent.map((row) => row.interaction_count) }]} /></div></section>;
 }
 
 function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Agent[]; onCreated: (agent: Agent) => void; onUpdated: (agent: Agent) => void; onDeleted: (agentId: string) => void }) {

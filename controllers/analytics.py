@@ -31,11 +31,16 @@ class AgentAnalytics(CostMetrics):
     agent_name: str | None
 
 
+class DailyModelAnalytics(ModelAnalytics):
+    date: str
+
+
 class AnalyticsReport(BaseModel):
     lookback_days: int
     summary: CostMetrics
     by_model: list[ModelAnalytics]
     by_agent: list[AgentAnalytics]
+    daily_by_model: list[DailyModelAnalytics]
 
 
 @router.get("", response_model=AnalyticsReport)
