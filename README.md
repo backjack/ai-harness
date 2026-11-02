@@ -152,6 +152,20 @@ The dashboard uses browser-history routes such as `/chat`, `/agents`,
 servers must use an SPA fallback that serves `frontend/dist/index.html` for
 frontend paths that do not match a static asset.
 
+### Google authentication
+
+Create a Google OAuth 2.0 Web application client and add the frontend origins
+(for example `http://localhost:5173` and the deployed origin) as authorized
+JavaScript origins. Set its client ID as `GOOGLE_CLIENT_ID` in the backend
+environment. The browser obtains a Google ID token, keeps it for the current
+tab, and sends it as a bearer token to protected `/api` endpoints. Health,
+Swagger/OpenAPI, and authentication bootstrap endpoints remain public.
+
+For a trusted static-user deployment, set `AUTH_ENABLED=false` together with
+`AUTH_STATIC_USER_NAME` and `AUTH_STATIC_USER_EMAIL`. This bypasses JWT
+validation for every API request, so keep `AUTH_ENABLED=true` anywhere Google
+authentication must be enforced.
+
 ## Render deployment
 
 The root `Dockerfile` builds the React dashboard and Python service into one

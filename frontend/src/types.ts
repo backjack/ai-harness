@@ -32,7 +32,7 @@ export type Agent = {
   guardrails: AgentGuardrails;
 };
 
-export type AgentCreate = Omit<Agent, "agent_id"> & { owner_email: string; created_by: string; shared_with: string[] };
+export type AgentCreate = Omit<Agent, "agent_id"> & { shared_with: string[] };
 export type AgentUpdate = Partial<Omit<Agent, "agent_id">>;
 
 export type ChartContent = {
@@ -100,9 +100,11 @@ export type AnalyticsReport = {
   daily_by_model: DailyModelAnalytics[];
 };
 
-export type UserProfile = {
+export type AuthenticatedUser = {
+  sub: string;
   name: string;
-  emailId: string;
+  email: string;
+  picture?: string | null;
 };
 
 export type ConversationSummary = {

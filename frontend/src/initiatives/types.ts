@@ -77,6 +77,7 @@ export type InitiativeApproval = {
 
 export type InitiativeAccess = {
   user_name: string;
+  user_email?: string;
   access_provided_at: string;
 };
 

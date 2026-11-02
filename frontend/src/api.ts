@@ -1,9 +1,36 @@
-import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, ChatEvent, ConversationDetail, ConversationSummary, InlineToolTestResult, ToolDefinition, ToolSource, ToolTestResult } from "./types";
+import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, AuthenticatedUser, ChatEvent, ConversationDetail, ConversationSummary, InlineToolTestResult, ToolDefinition, ToolSource, ToolTestResult } from "./types";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
+let accessToken: string | null = null;
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setAuthToken(token: string | null): void {
+  accessToken = token;
+}
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
+async function apiFetch(path: string, init: RequestInit = {}, authenticated = true): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (authenticated && accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const response = await fetch(`${baseUrl}${path}`, { ...init, headers });
+  if (authenticated && response.status === 401) unauthorizedHandler?.();
+  return response;
+}
+
+async function publicJson<T>(path: string): Promise<T> {
+  const response = await apiFetch(path, {}, false);
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(error?.detail ?? `Request failed (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
 
 async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, init);
+  const response = await apiFetch(path, init);
   if (!response.ok) {
     const error = await response.json().catch(() => null) as { detail?: string } | null;
     throw new Error(error?.detail ?? `Request failed (${response.status})`);
@@ -12,90 +39,70 @@ async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 async function apiNoContent(path: string, init: RequestInit): Promise<void> {
-  const response = await fetch(`${baseUrl}${path}`, init);
+  const response = await apiFetch(path, init);
   if (!response.ok) {
     const error = await response.json().catch(() => null) as { detail?: string } | null;
     throw new Error(error?.detail ?? `Request failed (${response.status})`);
   }
 }
 
+export const getAuthConfig = () => publicJson<{ auth_enabled: boolean; client_id: string | null }>("/auth/config");
+export const getCurrentUser = () => apiJson<AuthenticatedUser>("/auth/me");
+export const logoutCurrentUser = () => apiNoContent("/auth/logout", { method: "POST" });
+
 export const getToolSources = () => apiJson<ToolSource[]>("/tool-sources");
 export const getTools = (query = "") => apiJson<ToolDefinition[]>(`/tools${query ? `?${query}` : ""}`);
 export type ToolSourceTest = { source_id: string; status: "available" | "unavailable"; tool_count: number; error: string | null; duration_ms: number };
 export const getToolsForSource = (sourceId: string) => getTools(new URLSearchParams({ source_id: sourceId }).toString());
-export const registerMcpSource = (body: { name: string; description?: string; endpoint: string; owner_email: string }) => apiJson<ToolSource & { test: ToolSourceTest }>("/tool-sources/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const registerMcpSource = (body: { name: string; description?: string; endpoint: string }) => apiJson<ToolSource & { test: ToolSourceTest }>("/tool-sources/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const updateMcpSource = (sourceId: string, body: { name: string; description?: string; endpoint: string }) => apiJson<ToolSource & { test: ToolSourceTest }>(`/tool-sources/${encodeURIComponent(sourceId)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const testToolSource = (sourceId: string) => apiJson<ToolSourceTest>(`/tool-sources/${encodeURIComponent(sourceId)}/test`, { method: "POST" });
 export const createCustomTool = (body: Record<string, unknown>) => apiJson<ToolDefinition>("/tools/custom", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-export const testLibraryTool = (toolId: string, arguments_: Record<string, unknown>, invokedBy: string) => apiJson<ToolTestResult>(`/tools/${encodeURIComponent(toolId)}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ arguments: arguments_, invoked_by: invokedBy }) });
+export const testLibraryTool = (toolId: string, arguments_: Record<string, unknown>) => apiJson<ToolTestResult>(`/tools/${encodeURIComponent(toolId)}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ arguments: arguments_ }) });
 export const testInlineTool = (body: { name: string; description: string; source_code: string; arguments: Record<string, unknown> }) => apiJson<InlineToolTestResult>("/tools/inline/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const deleteToolSource = (sourceId: string) => apiNoContent(`/tool-sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" });
 export const deleteLibraryTool = (toolId: string) => apiNoContent(`/tools/${encodeURIComponent(toolId)}`, { method: "DELETE" });
 
 export async function getAgents(): Promise<Agent[]> {
-  const response = await fetch(`${baseUrl}/agents`);
-  if (!response.ok) throw new Error("Could not load agents");
-  return response.json() as Promise<Agent[]>;
+  return apiJson<Agent[]>("/agents");
 }
 
 export async function createAgent(body: AgentCreate): Promise<Agent> {
-  const response = await fetch(`${baseUrl}/agents`, {
+  return apiJson<Agent>("/agents", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => null) as { detail?: string } | null;
-    throw new Error(error?.detail ?? "Could not create agent");
-  }
-  return response.json() as Promise<Agent>;
 }
 
 export async function updateAgent(agentId: string, body: AgentUpdate): Promise<Agent> {
-  const response = await fetch(`${baseUrl}/agents/${encodeURIComponent(agentId)}`, {
+  return apiJson<Agent>(`/agents/${encodeURIComponent(agentId)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    const error = await response.json().catch(() => null) as { detail?: string } | null;
-    throw new Error(error?.detail ?? "Could not update agent");
-  }
-  return response.json() as Promise<Agent>;
 }
 
 export const deleteAgent = (agentId: string) => apiNoContent(`/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" });
 
 export async function getAnalytics(): Promise<AnalyticsReport> {
-  const response = await fetch(`${baseUrl}/analytics`);
-  if (!response.ok) throw new Error("Could not load analytics");
-  return response.json() as Promise<AnalyticsReport>;
+  return apiJson<AnalyticsReport>("/analytics");
 }
 
-export async function getConversations(emailId: string): Promise<ConversationSummary[]> {
-  const query = new URLSearchParams({ email_id: emailId });
-  const response = await fetch(`${baseUrl}/conversations?${query}`);
-  if (!response.ok) throw new Error("Could not load conversations");
-  return response.json() as Promise<ConversationSummary[]>;
+export async function getConversations(): Promise<ConversationSummary[]> {
+  return apiJson<ConversationSummary[]>("/conversations");
 }
 
-export async function getConversation(sessionId: string, emailId: string, signal?: AbortSignal): Promise<ConversationDetail> {
-  const query = new URLSearchParams({ email_id: emailId });
-  const response = await fetch(`${baseUrl}/conversations/${encodeURIComponent(sessionId)}?${query}`, { signal });
-  if (!response.ok) {
-    const error = await response.json().catch(() => null) as { detail?: string } | null;
-    throw new Error(error?.detail ?? "Could not load conversation");
-  }
-  return response.json() as Promise<ConversationDetail>;
+export async function getConversation(sessionId: string, signal?: AbortSignal): Promise<ConversationDetail> {
+  return apiJson<ConversationDetail>(`/conversations/${encodeURIComponent(sessionId)}`, { signal });
 }
 
 export async function streamChat(body: {
   agent_id: string;
-  user_id: string;
   user_prompt: string;
   session_id?: string;
 }, onEvent: (event: ChatEvent) => void): Promise<void> {
-  const response = await fetch(`${baseUrl}/chat/stream`, {
+  const response = await apiFetch("/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify(body),

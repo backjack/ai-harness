@@ -3,19 +3,21 @@
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from controllers.analytics import router as analytics_router
+from controllers.auth import router as auth_router
 from controllers.agents import router as agents_router
 from controllers.conversations import router as conversations_router
 from controllers.service_status import router as service_status_router
 from controllers.tool_library import router as tool_library_router
 from utils.config import get_config
 from utils.logging_config import configure_logging
+from services.auth import get_current_user
 
 
 configure_logging()
@@ -36,6 +38,7 @@ app = FastAPI(
         {"name": "chat", "description": "Stateless AI chat endpoints."},
         {"name": "analytics", "description": "Usage and token-cost reporting."},
         {"name": "conversations", "description": "Recent user conversation summaries."},
+        {"name": "authentication", "description": "Google OIDC authentication."},
     ],
 )
 cors_origins = [
@@ -53,10 +56,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(service_status_router, prefix="/api")
-app.include_router(agents_router, prefix="/api")
-app.include_router(analytics_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(agents_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(analytics_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(conversations_router, prefix="/api")
-app.include_router(tool_library_router, prefix="/api")
+app.include_router(tool_library_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.mount(
     "/api/docs-assets",
     StaticFiles(directory=swagger_ui_assets),

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 from controllers.service_status import _classify_message
+from services.auth import AuthenticatedUser, get_current_user
 from services.analytics import get_analytics_report
 from services.agent_repository import _decode_agent, _serialize_agent_values, update_agent as update_stored_agent
 from services.chat_events import ChatEventSink
@@ -36,6 +37,17 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 
 client = TestClient(app)
+
+
+def _test_user() -> AuthenticatedUser:
+    return AuthenticatedUser(
+        sub="google-user-1",
+        email="neeraj@example.com",
+        name="Neeraj Sharma",
+    )
+
+
+app.dependency_overrides[get_current_user] = _test_user
 
 
 def agent_record() -> dict[str, object]:
@@ -152,7 +164,7 @@ def test_openapi_schema_documents_the_api() -> None:
     assert schema["info"]["title"] == "AI Harness API"
     assert schema["info"]["version"] == "0.1.0"
     assert {"/api/", "/api/health", "/api/chat", "/api/analytics", "/api/conversations"}.issubset(schema["paths"])
-    assert {tag["name"] for tag in schema["tags"]} == {"service", "health", "chat", "analytics", "conversations"}
+    assert {tag["name"] for tag in schema["tags"]} == {"service", "health", "chat", "analytics", "conversations", "authentication"}
     assert "ChatRequest" in schema["components"]["schemas"]
     assert "ChatResponse" in schema["components"]["schemas"]
     assert {"200", "422", "502", "503"}.issubset(
@@ -176,7 +188,7 @@ def test_conversations_returns_five_email_scoped_summaries(monkeypatch) -> None:
 
     monkeypatch.setattr("controllers.conversations.list_conversations_by_email", summaries)
 
-    response = client.get("/api/conversations", params={"email_id": "neeraj@example.com"})
+    response = client.get("/api/conversations")
 
     assert response.status_code == 200
     assert captured == {"email_id": "neeraj@example.com", "limit": 5}
@@ -184,16 +196,15 @@ def test_conversations_returns_five_email_scoped_summaries(monkeypatch) -> None:
     assert response.json()[0]["interaction_count"] == 3
 
 
-def test_conversations_requires_email_and_reports_database_failure(monkeypatch) -> None:
+def test_conversations_uses_authenticated_email_and_reports_database_failure(monkeypatch) -> None:
     from utils.database import DatabaseUnavailableError
 
     def unavailable(*args, **kwargs) -> list[dict[str, object]]:
         raise DatabaseUnavailableError("unreachable")
 
-    assert client.get("/api/conversations").status_code == 422
     monkeypatch.setattr("controllers.conversations.list_conversations_by_email", unavailable)
 
-    response = client.get("/api/conversations", params={"email_id": "neeraj@example.com"})
+    response = client.get("/api/conversations")
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Database service is unavailable"}
@@ -237,9 +248,7 @@ def test_conversation_detail_returns_complete_email_scoped_transcript(monkeypatc
 
     monkeypatch.setattr("controllers.conversations.get_conversation_by_email", detail)
 
-    response = client.get(
-        "/api/conversations/session-1", params={"email_id": "neeraj@example.com"}
-    )
+    response = client.get("/api/conversations/session-1")
 
     assert response.status_code == 200
     assert captured == {"email_id": "neeraj@example.com", "session_id": "session-1"}
@@ -941,11 +950,9 @@ def test_create_agent_returns_persisted_agent(monkeypatch) -> None:
             "description": "Helpful assistant.",
             "initiative_id": "initiative-123",
             "faq": {"What can you do?": "I can help."},
-            "owner_email": "owner@example.com",
             "model_id": "gpt-5.4-mini",
             "tooling": [],
             "model_type": "openai",
-            "created_by": "owner@example.com",
         },
     )
 
@@ -954,6 +961,21 @@ def test_create_agent_returns_persisted_agent(monkeypatch) -> None:
     assert captured["description"] == "Helpful assistant."
     assert captured["initiative_id"] == "initiative-123"
     assert captured["faq"] == {"What can you do?": "I can help."}
+    assert captured["owner_email"] == "neeraj@example.com"
+    assert captured["created_by"] == "neeraj@example.com"
+
+
+def test_agent_identity_fields_cannot_be_supplied_by_client() -> None:
+    create_response = client.post("/api/agents", json={
+        "agent_name": "Assistant", "model_id": "gpt-5.4-mini", "model_type": "openai",
+        "owner_email": "spoofed@example.com", "created_by": "spoofed@example.com",
+    })
+    update_response = client.patch(
+        "/api/agents/agent-1", json={"owner_email": "spoofed@example.com"}
+    )
+
+    assert create_response.status_code == 422
+    assert update_response.status_code == 422
 
 
 def test_create_agent_rejects_response_only_guardrails() -> None:
@@ -962,12 +984,10 @@ def test_create_agent_rejects_response_only_guardrails() -> None:
         json={
             "agent_name": "Assistant",
             "description": "Helpful assistant.",
-            "owner_email": "owner@example.com",
             "model_id": "gpt-5.4-mini",
             "tooling": [],
             "model_type": "openai",
             "guardrails": {"out_of_scope_response": "Topics on restricted-topic"},
-            "created_by": "owner@example.com",
         },
     )
 
@@ -991,7 +1011,6 @@ def test_create_agent_accepts_and_normalizes_blocked_topics(monkeypatch) -> None
         json={
             "agent_name": "Assistant",
             "description": "Helpful assistant.",
-            "owner_email": "owner@example.com",
             "model_id": "gpt-5.4-mini",
             "tooling": [],
             "model_type": "openai",
@@ -999,7 +1018,6 @@ def test_create_agent_accepts_and_normalizes_blocked_topics(monkeypatch) -> None
                 "blocked_topics": [" restricted-topic ", "RESTRICTED-TOPIC"],
                 "out_of_scope_response": " Request blocked. ",
             },
-            "created_by": "owner@example.com",
         },
     )
 
@@ -1027,10 +1045,8 @@ def test_create_agent_defaults_faq_to_null_storage_and_empty_response(monkeypatc
         "/api/agents",
         json={
             "agent_name": "Assistant",
-            "owner_email": "owner@example.com",
             "model_id": "gpt-5.4-mini",
             "model_type": "openai",
-            "created_by": "owner@example.com",
         },
     )
 
@@ -1054,10 +1070,8 @@ def test_create_agent_accepts_null_faq(monkeypatch) -> None:
         "/api/agents",
         json={
             "agent_name": "Assistant",
-            "owner_email": "owner@example.com",
             "model_id": "gpt-5.4-mini",
             "model_type": "openai",
-            "created_by": "owner@example.com",
             "faq": None,
         },
     )
@@ -1090,10 +1104,8 @@ def test_create_agent_rejects_invalid_faq(faq: object) -> None:
         "/api/agents",
         json={
             "agent_name": "Assistant",
-            "owner_email": "owner@example.com",
             "model_id": "gpt-5.4-mini",
             "model_type": "openai",
-            "created_by": "owner@example.com",
             "faq": faq,
         },
     )
@@ -1117,10 +1129,8 @@ def test_create_agent_accepts_inline_python_tool(monkeypatch) -> None:
         "/api/agents",
         json={
             "agent_name": "Stock Analyst",
-            "owner_email": "owner@example.com",
             "model_id": "gpt-5.4-mini",
             "model_type": "openai",
-            "created_by": "owner@example.com",
             "tooling": stored["tooling"],
         },
     )
@@ -1475,12 +1485,57 @@ def test_mcp_registration_is_saved_when_discovery_is_unavailable(monkeypatch) ->
 
     monkeypatch.setattr("controllers.tool_library.discover_source", unavailable)
     response = client.post("/api/tool-sources/mcp", json={
-        "name": "SMB Sandbox", "description": "Invoice tools", "endpoint": "http://sandbox/mcp", "owner_email": "owner@example.com",
+        "name": "SMB Sandbox", "description": "Invoice tools", "endpoint": "http://sandbox/mcp",
     })
 
     assert response.status_code == 201
     assert response.json()["source_id"] == "source-1"
+    assert response.json()["owner_email"] == "neeraj@example.com"
     assert response.json()["test"]["status"] == "unavailable"
+
+
+def test_tool_identity_is_derived_from_authenticated_user(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def create(values: dict[str, object]) -> dict[str, object]:
+        captured["custom"] = values
+        return {"tool_definition_id": "tool-1", **values}
+
+    async def execute(tool_id: str, arguments: dict[str, object], invoked_by: str) -> dict[str, object]:
+        captured.update(tool_id=tool_id, arguments=arguments, invoked_by=invoked_by)
+        return {"execution_id": "exec-1", "outcome": "success", "output": 4, "error": None, "duration_ms": 1}
+
+    monkeypatch.setattr("controllers.tool_library.create_custom_tool", create)
+    monkeypatch.setattr("controllers.tool_library.test_tool", execute)
+    custom = client.post("/api/tools/custom", json={
+        "name": "double", "description": "Double a value.",
+        "source_code": "def double(value): return value * 2",
+    })
+    execution = client.post("/api/tools/tool-1/test", json={"arguments": {"value": 2}})
+
+    assert custom.status_code == 201
+    assert captured["custom"]["owner_email"] == "neeraj@example.com"
+    assert execution.status_code == 200
+    assert captured["invoked_by"] == "neeraj@example.com"
+
+
+def test_tool_identity_fields_cannot_be_supplied_by_client() -> None:
+    source = client.post("/api/tool-sources/mcp", json={
+        "name": "Spoofed", "endpoint": "https://example.com/mcp",
+        "owner_email": "spoofed@example.com",
+    })
+    custom = client.post("/api/tools/custom", json={
+        "name": "spoofed", "description": "Spoofed owner.",
+        "source_code": "def spoofed(): return None", "owner_email": "spoofed@example.com",
+    })
+    execution = client.post(
+        "/api/tools/tool-1/test",
+        json={"arguments": {}, "invoked_by": "spoofed@example.com"},
+    )
+
+    assert source.status_code == 422
+    assert custom.status_code == 422
+    assert execution.status_code == 422
 
 
 def test_mcp_source_update_saves_and_rediscovers_only_requested_source(monkeypatch) -> None:
@@ -1792,8 +1847,8 @@ def test_agent_accepts_non_executable_mcp_tool_snapshot(monkeypatch) -> None:
     monkeypatch.setattr("controllers.agents.create_agent", lambda values: stored)
 
     response = client.post("/api/agents", json={
-        "agent_name": "Invoice Assistant", "owner_email": "owner@example.com", "model_id": "gpt-5.4-mini",
-        "model_type": "openai", "created_by": "owner@example.com", "tooling": stored["tooling"],
+        "agent_name": "Invoice Assistant", "model_id": "gpt-5.4-mini",
+        "model_type": "openai", "tooling": stored["tooling"],
     })
 
     assert response.status_code == 201

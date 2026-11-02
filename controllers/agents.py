@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from utils.database import DatabaseUnavailableError
 from services.agent_repository import create_agent, deactivate_agent, get_agent, list_agents, update_agent
 from services.tool_runtime import ToolFunctionValidationError, validate_tool_definitions
+from services.auth import CurrentUser
 
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -79,7 +80,6 @@ class AgentBase(BaseModel):
     agent_name: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=4000)
     initiative_id: str | None = Field(default=None, max_length=255)
-    owner_email: str = Field(min_length=3, max_length=320)
     shared_with: list[str] = Field(default_factory=list)
     model_id: str = Field(min_length=1, max_length=255)
     tooling: list[AgentTool] = Field(default_factory=list)
@@ -93,13 +93,12 @@ class AgentBase(BaseModel):
 
 class AgentCreate(AgentBase):
     faq: dict[str, str] | None = None
-    created_by: str = Field(min_length=3, max_length=320)
 
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "agent_name": "Assistant",
-                "owner_email": "owner@example.com",
                 "shared_with": [],
                 "model_id": "gpt-5.4-mini",
                 "tooling": [
@@ -114,7 +113,6 @@ class AgentCreate(AgentBase):
                 "user_prompts": [],
                 "model_type": "openai",
                 "guardrails": {},
-                "created_by": "owner@example.com",
             }
         }
     )
@@ -125,7 +123,6 @@ class AgentUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     initiative_id: str | None = Field(default=None, max_length=255)
     faq: dict[str, str] | None = None
-    owner_email: str | None = Field(default=None, min_length=3, max_length=320)
     shared_with: list[str] | None = None
     model_id: str | None = Field(default=None, min_length=1, max_length=255)
     tooling: list[AgentTool] | None = None
@@ -134,9 +131,12 @@ class AgentUpdate(BaseModel):
     model_type: Literal["openai", "ollama"] | None = None
     guardrails: GuardrailsConfig | None = None
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class AgentResponse(AgentBase):
     agent_id: str
+    owner_email: str
     created_by: str
     created_at: datetime
     last_updated_at: datetime
@@ -154,10 +154,10 @@ def _database_error(exc: DatabaseUnavailableError) -> HTTPException:
 
 
 @router.post("", response_model=AgentDetailResponse, status_code=status.HTTP_201_CREATED)
-async def create_agent_endpoint(request: AgentCreate) -> dict[str, Any]:
+async def create_agent_endpoint(request: AgentCreate, user: CurrentUser) -> dict[str, Any]:
     """Create an agent definition."""
     try:
-        return create_agent(request.model_dump())
+        return create_agent({**request.model_dump(), "owner_email": user.email, "created_by": user.email})
     except DatabaseUnavailableError as exc:
         raise _database_error(exc) from exc
     except ToolFunctionValidationError as exc:

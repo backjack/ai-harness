@@ -7,10 +7,9 @@ import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { matchPath, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { createAgent, createCustomTool, deleteAgent, deleteLibraryTool, deleteToolSource, getAgents, getAnalytics, getConversation, getConversations, getTools, getToolsForSource, getToolSources, registerMcpSource, streamChat, testInlineTool, testLibraryTool, testToolSource, updateAgent, updateMcpSource } from "./api";
-import type { Agent, AgentCreate, AgentGuardrails, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, InlineToolTestResult, ToolDefinition, ToolEffect, ToolSource, ToolTestResult, UserProfile } from "./types";
+import type { Agent, AgentCreate, AgentGuardrails, AgentTool, AgentUpdate, AnalyticsReport, ChartContent, ChatEvent, ChatMessage, Conversation, ConversationSummary, InlineToolTestResult, ToolDefinition, ToolEffect, ToolSource, ToolTestResult } from "./types";
 import InitiativeManagement from "./initiatives/InitiativeManagement";
-
-const USER_PROFILE: UserProfile = { name: "Neeraj Sharma", emailId: "neerajs28288@gmail.com" };
+import { useAuth } from "./auth";
 
 function isChartContent(value: unknown): value is ChartContent {
   return Boolean(value && typeof value === "object" && (value as ChartContent).library === "highcharts"
@@ -429,7 +428,7 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
 
   async function submitMcp(event: FormEvent) {
     event.preventDefault(); setBusy(true);
-    try { await registerMcpSource({ ...mcpForm, owner_email: USER_PROFILE.emailId }); setDialog(null); setMcpForm({ name: "", description: "", endpoint: "" }); await load(); showToast("success", "MCP server registered successfully."); }
+    try { await registerMcpSource(mcpForm); setDialog(null); setMcpForm({ name: "", description: "", endpoint: "" }); await load(); showToast("success", "MCP server registered successfully."); }
     catch (reason) { apiError(reason, "Could not register MCP server"); }
     finally { setBusy(false); }
   }
@@ -453,7 +452,7 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
   }
   async function submitCustom(event: FormEvent) {
     event.preventDefault(); setBusy(true);
-    try { await createCustomTool({ ...customForm, owner_email: USER_PROFILE.emailId }); setDialog(null); setCustomForm({ name: "", display_name: "", description: "", category: "Other", effect: "unknown", source_code: "" }); await load(); showToast("success", "Custom tool created successfully."); }
+    try { await createCustomTool(customForm); setDialog(null); setCustomForm({ name: "", display_name: "", description: "", category: "Other", effect: "unknown", source_code: "" }); await load(); showToast("success", "Custom tool created successfully."); }
     catch (reason) { apiError(reason, "Could not create custom tool"); }
     finally { setBusy(false); }
   }
@@ -500,7 +499,7 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
     }
     setBusy(true); setTestResult(null);
     try {
-      const result = await testLibraryTool(selected.tool_definition_id, args, USER_PROFILE.emailId);
+      const result = await testLibraryTool(selected.tool_definition_id, args);
       setTestResult(result);
       if (result.outcome === "success") showToast("success", "Tool test completed successfully.");
       else showToast("error", result.error || "Tool test failed.");
@@ -913,7 +912,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
         onUpdated(await updateAgent(editingAgent.agent_id, updatePayload));
         setCreating(false); resetForm();
       } else {
-        const createPayload: AgentCreate = { ...updatePayload as Omit<Agent, "agent_id">, owner_email: USER_PROFILE.emailId, created_by: USER_PROFILE.emailId, shared_with: [] };
+        const createPayload: AgentCreate = { ...updatePayload as Omit<Agent, "agent_id">, shared_with: [] };
         onCreated(await createAgent(createPayload));
       }
     }
@@ -1123,6 +1122,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
 }
 
 export default function App() {
+  const { user, authEnabled, signingOut, signOut } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const conversationRoute = matchPath("/conversations/:sessionId", location.pathname);
@@ -1159,7 +1159,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    getConversations(USER_PROFILE.emailId).then((items) => {
+    getConversations().then((items) => {
       const saved = items.map(conversationFromSummary);
       setConversations((current) => {
         const draft = current.find((conversation) => !conversation.sessionId && !conversation.messages.length);
@@ -1273,7 +1273,7 @@ export default function App() {
     setStreaming(true);
     let finalResult: ChatEvent["response"];
     try {
-      await streamChat({ agent_id: agentId, user_id: USER_PROFILE.emailId, user_prompt: text, session_id: conversation.sessionId }, (event) => {
+      await streamChat({ agent_id: agentId, user_prompt: text, session_id: conversation.sessionId }, (event) => {
         setConversations((items) => items.map((item) => item.id === conversationId ? {
           ...item,
           executionEvents: [...(item.executionEvents ?? []), event],
@@ -1335,7 +1335,7 @@ export default function App() {
     setConversationLoadingId(conversation.id);
     setError("");
     try {
-      const detail = await getConversation(conversation.sessionId, USER_PROFILE.emailId, controller.signal);
+      const detail = await getConversation(conversation.sessionId, controller.signal);
       if (controller.signal.aborted) return;
       setSelectedAgent(detail.agent_id);
       setConversations((items) => items.map((item) => item.id === conversation.id ? {
@@ -1405,7 +1405,7 @@ export default function App() {
         <div className="conversation-heading"><div className="conversation-heading-title"><svg className="conversation-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14A2.5 2.5 0 0 1 21.5 8v7A2.5 2.5 0 0 1 19 17.5H10l-4.5 3v-3A2.5 2.5 0 0 1 3 15V8a2.5 2.5 0 0 1 2-2.5Z" /><path d="M8 11h8M8 14h5" /></svg><span className="section-label sidebar-label">Conversations</span></div><span className="section-divider" aria-hidden="true" /></div>
         <div className="history">{conversationsLoading ? <div className="conversation-loading" role="status" aria-label="Loading conversations"><span /><span /><span /></div> : sidebarConversations.map((conversation) => <button className={view === "chat" && conversation.id === activeId ? "history-item active" : "history-item"} key={conversation.id} onClick={() => openConversation(conversation)} title={conversation.title} aria-label={conversation.title}><svg className="history-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14A2.5 2.5 0 0 1 21.5 8v7A2.5 2.5 0 0 1 19 17.5H10l-4.5 3v-3A2.5 2.5 0 0 1 3 15V8a2.5 2.5 0 0 1 2-2.5Z" /></svg><span className="history-label">{conversation.title}</span></button>)}</div>
       </section>
-      <div className="profile" title={USER_PROFILE.emailId}><span className="avatar" title={USER_PROFILE.name}>{USER_PROFILE.name.charAt(0).toUpperCase()}</span><span className="profile-name">{USER_PROFILE.name}</span></div>
+      <div className="profile" title={authEnabled ? user.email : `Static user ${user.email}`}><span className="avatar" title={user.name}>{user.name.charAt(0).toUpperCase()}</span><span className="profile-identity"><span className="profile-name">{user.name}</span><span className="profile-email">{user.email}</span>{!authEnabled&&<span className="profile-mode">Static user</span>}</span>{authEnabled&&<button type="button" className="profile-logout" title="Log out" aria-label={`Log out ${user.name}`} disabled={signingOut} onClick={()=>void signOut()}>{signingOut?<i className="loading-circle small" aria-hidden="true"/>:<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h5M14 8l4 4-4 4M8 12h10"/></svg>}</button>}</div>
     </aside>
     <section className={view === "chat" ? "workspace" : "workspace content-workspace"}>
       <Routes><Route path="/" element={<Navigate to="/chat" replace />} /><Route path="/chat" element={null} /><Route path="/conversations/:sessionId" element={null} /><Route path="/agents" element={null} /><Route path="/initiatives" element={null} /><Route path="/initiatives/new" element={null} /><Route path="/initiatives/:initiativeId" element={null} /><Route path="/initiatives/:initiativeId/edit" element={null} /><Route path="/marketplace" element={null} /><Route path="/analytics" element={null} /><Route path="*" element={<Navigate to="/chat" replace />} /></Routes>

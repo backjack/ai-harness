@@ -3,11 +3,12 @@
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 from services.tool_library import create_custom_tool, create_source, deactivate_source, deactivate_tool, discover_source, get_tool, list_executions, list_sources, list_tools, test_inline_tool, test_tool, update_source
 from services.tool_runtime import ToolFunctionValidationError
 from utils.database import DatabaseUnavailableError
+from services.auth import CurrentUser
 
 
 router = APIRouter(tags=["tool-library"])
@@ -17,7 +18,8 @@ class McpSourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     endpoint: AnyHttpUrl
-    owner_email: str = Field(min_length=3, max_length=320)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class McpSourceUpdate(BaseModel):
@@ -31,16 +33,18 @@ class CustomToolCreate(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
     description: str = Field(min_length=1, max_length=2000)
     source_code: str = Field(min_length=1)
-    owner_email: str = Field(min_length=3, max_length=320)
     category: str = Field(default="Other", max_length=100)
     effect: Literal["read", "calculate", "write", "delete", "unknown"] = "unknown"
     examples: list[str] = Field(default_factory=list)
     output_preview: Any | None = None
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class ToolTestRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
-    invoked_by: str = Field(min_length=3, max_length=320)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class InlineToolTestRequest(BaseModel):
@@ -61,9 +65,9 @@ async def sources_endpoint() -> list[dict[str, Any]]:
 
 
 @router.post("/tool-sources/mcp", status_code=status.HTTP_201_CREATED)
-async def create_source_endpoint(request: McpSourceCreate) -> dict[str, Any]:
+async def create_source_endpoint(request: McpSourceCreate, user: CurrentUser) -> dict[str, Any]:
     try:
-        source = create_source({**request.model_dump(mode="json"), "endpoint": str(request.endpoint)})
+        source = create_source({**request.model_dump(mode="json"), "endpoint": str(request.endpoint), "owner_email": user.email})
         source["test"] = await discover_source(source["source_id"])
         return source
     except DatabaseUnavailableError as exc: raise _db_error(exc) from exc
@@ -112,8 +116,8 @@ async def tool_endpoint(tool_definition_id: str) -> dict[str, Any]:
 
 
 @router.post("/tools/custom", status_code=status.HTTP_201_CREATED)
-async def create_custom_endpoint(request: CustomToolCreate) -> dict[str, Any]:
-    try: return create_custom_tool(request.model_dump())
+async def create_custom_endpoint(request: CustomToolCreate, user: CurrentUser) -> dict[str, Any]:
+    try: return create_custom_tool({**request.model_dump(), "owner_email": user.email})
     except ToolFunctionValidationError as exc: raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DatabaseUnavailableError as exc: raise _db_error(exc) from exc
 
@@ -124,8 +128,8 @@ async def test_inline_tool_endpoint(request: InlineToolTestRequest) -> dict[str,
 
 
 @router.post("/tools/{tool_definition_id}/test")
-async def test_tool_endpoint(tool_definition_id: str, request: ToolTestRequest) -> dict[str, Any]:
-    try: return await test_tool(tool_definition_id, request.arguments, request.invoked_by)
+async def test_tool_endpoint(tool_definition_id: str, request: ToolTestRequest, user: CurrentUser) -> dict[str, Any]:
+    try: return await test_tool(tool_definition_id, request.arguments, user.email)
     except KeyError as exc: raise HTTPException(status_code=404, detail="Tool not found") from exc
     except DatabaseUnavailableError as exc: raise _db_error(exc) from exc
 

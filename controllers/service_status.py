@@ -23,6 +23,7 @@ from services.model_execution import (
     ModelNotConfiguredError,
 )
 from services.service_status import get_health_status, get_service_identifier
+from services.auth import AuthenticatedUser, CurrentUser
 
 
 router = APIRouter()
@@ -32,7 +33,6 @@ class ChatRequest(BaseModel):
     """A chat request associated with an agent and optional session."""
 
     agent_id: str = Field(min_length=1, max_length=36)
-    user_id: str = Field(min_length=3, max_length=320)
     user_prompt: Annotated[str, Field(min_length=1)]
     session_id: str | None = Field(default=None, min_length=1, max_length=255)
 
@@ -107,7 +107,9 @@ async def database_health_check() -> dict[str, str]:
 
 
 async def _run_chat(
-    request: ChatRequest, event_sink: ChatEventSink | None = None
+    request: ChatRequest,
+    user: AuthenticatedUser,
+    event_sink: ChatEventSink | None = None,
 ) -> ChatResponse:
     """Generate and audit a response for a configured agent."""
     chat_event_id = event_sink.chat_event_id if event_sink else str(uuid4())
@@ -163,7 +165,7 @@ async def _run_chat(
         try:
             chat_sequence_id = record_successful_chat(
                 agent_id=request.agent_id,
-                user_id=request.user_id,
+                user_id=user.email,
                 session_id=session_id,
                 model_id=agent["model_id"],
                 user_prompt=request.user_prompt,
@@ -205,9 +207,9 @@ async def _run_chat(
         503: {"description": "The chat or database service is unavailable."},
     },
 )
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(request: ChatRequest, user: CurrentUser) -> ChatResponse:
     """Generate, audit, and return a rich final response."""
-    return await _run_chat(request)
+    return await _run_chat(request, user)
 
 
 def _sse_frame(event: dict[str, Any]) -> str:
@@ -224,13 +226,13 @@ def _sse_frame(event: dict[str, Any]) -> str:
     response_class=StreamingResponse,
     responses={200: {"content": {"text/event-stream": {}}}},
 )
-async def chat_stream(request: ChatRequest) -> StreamingResponse:
+async def chat_stream(request: ChatRequest, user: CurrentUser) -> StreamingResponse:
     """Stream full model and tool progress until the audited final response."""
     sink = ChatEventSink()
 
     async def produce() -> None:
         try:
-            result = await _run_chat(request, sink)
+            result = await _run_chat(request, user, sink)
             sink.emit("final", response=result.model_dump())
             sink.emit("complete", session_id=result.session_id)
         except HTTPException as exc:
