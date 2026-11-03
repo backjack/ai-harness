@@ -600,6 +600,36 @@ def test_conversation_cache_signature_changes_with_guardrails() -> None:
     assert ConversationAgentCache._definition_signature(agent) != original_signature
 
 
+def test_conversation_cache_refreshes_current_session_after_guardrail_update(monkeypatch) -> None:
+    from services.conversation_agent import ConversationAgentCache
+
+    cache = ConversationAgentCache()
+    created: list[SimpleNamespace] = []
+
+    def create_runtime(agent: dict[str, object], session_id: str) -> SimpleNamespace:
+        runtime = SimpleNamespace(
+            definition_signature=cache._definition_signature(agent),
+            last_accessed=0.0,
+            lock=asyncio.Lock(),
+            session_id=session_id,
+            guardrails=agent.get("guardrails") or {},
+        )
+        created.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(cache, "_create_runtime_agent", create_runtime)
+    agent = agent_record()
+
+    first = asyncio.run(cache.get_or_create(agent, "current-session"))
+    agent["guardrails"] = {"blocked_topics": ["restricted-topic"]}
+    refreshed = asyncio.run(cache.get_or_create(agent, "current-session"))
+
+    assert refreshed is not first
+    assert refreshed.session_id == "current-session"
+    assert refreshed.guardrails == {"blocked_topics": ["restricted-topic"]}
+    assert len(created) == 2
+
+
 def test_conversation_guardrail_classifier_failure_blocks_safely() -> None:
     from services.conversation_agent import ConversationAgent
 

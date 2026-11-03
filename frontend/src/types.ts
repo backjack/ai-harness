@@ -30,6 +30,11 @@ export type Agent = {
   system_prompts: string[];
   user_prompts: string[];
   guardrails: AgentGuardrails;
+  shared_with?: string[];
+  owner_email?: string;
+  created_by?: string;
+  created_at?: string;
+  last_updated_at?: string;
 };
 
 export type AgentCreate = Omit<Agent, "agent_id"> & { shared_with: string[] };

@@ -164,7 +164,7 @@ function MessageActions({ message, executionEvents, executionAgentName, executio
   </div>{showSteps && executionEvents?.length ? <ExecutionTrace events={executionEvents} agentName={executionAgentName ?? "Agent"} status={executionStatus ?? "completed"} /> : null}</>;
 }
 
-function MarkdownPromptEditor({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder: string }) {
+function MarkdownPromptEditor({ label, value, onChange, placeholder, readOnly = false }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; readOnly?: boolean }) {
   const [preview, setPreview] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -189,7 +189,7 @@ function MarkdownPromptEditor({ label, value, onChange, placeholder }: { label: 
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
-  return <section className="markdown-editor"><div className="editor-heading"><strong>{label}</strong><div role="group" aria-label={`${label} mode`}><button type="button" className={!preview ? "active" : ""} onClick={() => setPreview(false)}>Edit</button><button type="button" className={preview ? "active" : ""} onClick={() => setPreview(true)}>Preview</button></div></div>{preview ? <div className="markdown-preview">{value.trim() ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown> : <p>Nothing to preview.</p>}</div> : <><div className="markdown-toolbar" role="toolbar" aria-label={`${label} formatting`}><button type="button" title="Heading" onClick={() => prefixLines("## ")}>H</button><button type="button" title="Bold" onClick={() => replaceSelection("**", "**", "bold text")}><strong>B</strong></button><button type="button" title="Italic" onClick={() => replaceSelection("_", "_", "italic text")}><em>I</em></button><button type="button" title="Bulleted list" onClick={() => prefixLines("- ")}>• List</button><button type="button" title="Numbered list" onClick={() => prefixLines("1. ")}>1. List</button><button type="button" title="Task list" onClick={() => prefixLines("- [ ] ")}>☐ Task</button><button type="button" title="Link" onClick={() => replaceSelection("[", "](https://example.com)", "link text")}>Link</button><button type="button" title="Inline code" onClick={() => replaceSelection("`", "`", "code")}>Code</button><button type="button" title="Code block" onClick={() => replaceSelection("```\n", "\n```", "code")}>Block</button></div><textarea ref={textareaRef} value={value} onChange={(event) => onChange(event.target.value)} rows={9} placeholder={placeholder} /></>}</section>;
+  return <section className={`markdown-editor ${readOnly ? "read-only" : ""}`}><div className="editor-heading"><strong>{label}</strong><div role="group" aria-label={`${label} mode`}>{!readOnly && <button type="button" className={!preview ? "active" : ""} onClick={() => setPreview(false)}>Edit</button>}<button type="button" className={preview || readOnly ? "active" : ""} onClick={() => setPreview(true)}>Preview</button></div></div>{preview || readOnly ? <div className="markdown-preview">{value.trim() ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown> : <p>Nothing to preview.</p>}</div> : <><div className="markdown-toolbar" role="toolbar" aria-label={`${label} formatting`}><button type="button" title="Heading" onClick={() => prefixLines("## ")}>H</button><button type="button" title="Bold" onClick={() => replaceSelection("**", "**", "bold text")}><strong>B</strong></button><button type="button" title="Italic" onClick={() => replaceSelection("_", "_", "italic text")}><em>I</em></button><button type="button" title="Bulleted list" onClick={() => prefixLines("- ")}>• List</button><button type="button" title="Numbered list" onClick={() => prefixLines("1. ")}>1. List</button><button type="button" title="Task list" onClick={() => prefixLines("- [ ] ")}>☐ Task</button><button type="button" title="Link" onClick={() => replaceSelection("[", "](https://example.com)", "link text")}>Link</button><button type="button" title="Inline code" onClick={() => replaceSelection("`", "`", "code")}>Code</button><button type="button" title="Code block" onClick={() => replaceSelection("```\n", "\n```", "code")}>Block</button></div><textarea ref={textareaRef} value={value} onChange={(event) => onChange(event.target.value)} rows={9} placeholder={placeholder} /></>}</section>;
 }
 
 function PythonEditor({ value, onChange, label = "Python source" }: { value: string; onChange: (value: string) => void; label?: string }) {
@@ -631,9 +631,10 @@ function AnalyticsDashboard() {
   return <section className="content-page"><header className="content-page-header"><div><p className="eyebrow">LAST {report.lookback_days} DAYS</p><h1>Analytics</h1><p>Model usage, agent activity, token consumption, and estimated OpenAI cost.</p></div><button className="secondary-button" onClick={load}>Refresh</button></header><div className="analytics-summary"><article><span>Interactions</span><strong>{formatNumber(report.summary.interaction_count)}</strong></article><article><span>Input tokens</span><strong>{formatNumber(report.summary.input_tokens)}</strong></article><article><span>Output tokens</span><strong>{formatNumber(report.summary.output_tokens)}</strong></article><article><span>Estimated cost</span><strong className={report.summary.cost_usd === null ? "cost-unavailable" : ""}>{costLabel}</strong></article></div>{report.by_model.some((row) => row.cost_usd === null) && <p className="analytics-note">Cost charts omit models without configured pricing; unavailable cost is not treated as zero.</p>}<div className="analytics-trend-filters"><label>Date range<select value={trendDays} onChange={(event) => setTrendDays(Number(event.target.value) as 7 | 14 | 30)}><option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option></select></label><fieldset><legend>Models</legend><div className="analytics-model-filters">{report.by_model.map((row) => <label key={row.model_id}><input type="checkbox" checked={selectedModels.includes(row.model_id)} onChange={(event) => setSelectedModels((current) => event.target.checked ? [...current, row.model_id] : current.filter((modelId) => modelId !== row.model_id))} /><span>{row.model_id}</span></label>)}</div><div className="analytics-filter-actions"><button type="button" onClick={() => setSelectedModels(report.by_model.map((row) => row.model_id))}>Select all</button><button type="button" onClick={() => setSelectedModels([])}>Clear</button></div></fieldset></div><div className="analytics-grid"><AnalyticsTrendChart report={report} selectedModels={selectedModels} days={trendDays} /><AnalyticsChart title="Cost by model" categories={pricedModels.map((row) => row.model_id)} series={[{ name: "Cost", data: pricedModels.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Cost by agent" categories={pricedAgents.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Cost", data: pricedAgents.map((row) => row.cost_usd ?? 0) }]} valueSuffix=" USD" /><AnalyticsChart title="Token usage by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Input tokens", data: report.by_model.map((row) => row.input_tokens) }, { name: "Output tokens", data: report.by_model.map((row) => row.output_tokens) }]} /><AnalyticsChart title="Interactions by model" categories={report.by_model.map((row) => row.model_id)} series={[{ name: "Interactions", data: report.by_model.map((row) => row.interaction_count) }]} /><AnalyticsChart title="Interactions by agent" categories={report.by_agent.map((row) => row.agent_name || row.agent_id)} series={[{ name: "Interactions", data: report.by_agent.map((row) => row.interaction_count) }]} /></div></section>;
 }
 
-function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Agent[]; onCreated: (agent: Agent) => void; onUpdated: (agent: Agent) => void; onDeleted: (agentId: string) => void }) {
+function AgentManager({ agents, loading, onCreated, onUpdated, onDeleted }: { agents: Agent[]; loading: boolean; onCreated: (agent: Agent) => void; onUpdated: (agent: Agent) => void; onDeleted: (agentId: string) => void }) {
   const [creating, setCreating] = useState(false);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [viewingAgent, setViewingAgent] = useState<Agent | null>(null);
   const [search, setSearch] = useState("");
   const [step, setStep] = useState(1);
   const [name, setName] = useState("");
@@ -672,8 +673,11 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const modelTriggerRef = useRef<HTMLButtonElement>(null);
-  const availableModels = editingAgent && !MODEL_OPTIONS.some((model) => model.id === editingAgent.model_id)
-    ? [...MODEL_OPTIONS, { id: editingAgent.model_id, type: editingAgent.model_type, label: `${editingAgent.model_id} (${editingAgent.model_type})`, available: true }]
+  const activeAgent = editingAgent ?? viewingAgent;
+  const readOnly = Boolean(viewingAgent);
+  const wizardOpen = creating || readOnly;
+  const availableModels = activeAgent && !MODEL_OPTIONS.some((model) => model.id === activeAgent.model_id)
+    ? [...MODEL_OPTIONS, { id: activeAgent.model_id, type: activeAgent.model_type, label: `${activeAgent.model_id} (${activeAgent.model_type})`, available: true }]
     : MODEL_OPTIONS;
 
   useEffect(() => { getTools().then(setLibraryTools).catch(() => setLibraryTools([])); }, []);
@@ -749,20 +753,22 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
 
   function resetForm() {
     setName(""); setDescription(""); setModelId(MODEL_OPTIONS[0].id); setSystemPrompt(""); setUserPrompt(""); setInitiativeId("");
-    setTools([]); setToolDraft(null); setToolConfigTab("configure"); setToolDraftError(""); setInlineTestInput("{}"); setInlineTestInputError(""); setInlineTestResult(null); setToolTesting(false); setPolicyText(""); setBlockedTopics(""); setFallback(""); setSelectedGuardrail("policy"); setToolSearch(""); setServerFilter(""); setStep(1); setError(""); setEditingAgent(null); setModelMenuOpen(false);
+    setTools([]); setToolDraft(null); setToolConfigTab("configure"); setToolDraftError(""); setInlineTestInput("{}"); setInlineTestInputError(""); setInlineTestResult(null); setToolTesting(false); setPolicyText(""); setBlockedTopics(""); setFallback(""); setSelectedGuardrail("policy"); setToolSearch(""); setServerFilter(""); setStep(1); setError(""); setEditingAgent(null); setViewingAgent(null); setModelMenuOpen(false);
   }
 
   function openCreate() { resetForm(); setCreating(true); }
-  function openEdit(agent: Agent) {
+  function populateAgentForm(agent: Agent) {
     const guardrails = agent.guardrails ?? {};
     const allowedTopics = Array.isArray(guardrails.allowed_topics) ? guardrails.allowed_topics.filter((topic): topic is string => typeof topic === "string") : [];
     const savedBlockedTopics = Array.isArray(guardrails.blocked_topics) ? guardrails.blocked_topics.filter((topic): topic is string => typeof topic === "string") : [];
     const legacyPolicy = allowedTopics.length ? `Only allow requests related to these topics: ${allowedTopics.join(", ")}.` : "";
-    setEditingAgent(agent); setName(agent.agent_name); setDescription(agent.description); setModelId(agent.model_id);
+    setName(agent.agent_name); setDescription(agent.description); setModelId(agent.model_id);
     setSystemPrompt(agent.system_prompts[0] ?? ""); setUserPrompt(agent.user_prompts?.[0] ?? ""); setInitiativeId(agent.initiative_id ?? ""); setTools(agent.tooling.map((tool) => ({ ...tool })));
     setPolicyText(typeof guardrails.policy_text === "string" ? guardrails.policy_text : legacyPolicy); setBlockedTopics(savedBlockedTopics.join("\n")); setFallback(typeof guardrails.out_of_scope_response === "string" ? guardrails.out_of_scope_response : "");
-    setStep(1); setError(""); setCreating(true);
+    setStep(1); setError("");
   }
+  function openEdit(agent: Agent) { resetForm(); populateAgentForm(agent); setEditingAgent(agent); setCreating(true); }
+  function openView(agent: Agent) { resetForm(); populateAgentForm(agent); setViewingAgent(agent); }
 
   function closeModal() {
     if (saving) return;
@@ -771,13 +777,13 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   }
 
   useEffect(() => {
-    if (!creating) return undefined;
+    if (!wizardOpen) return undefined;
     const dismissOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") toolDraft ? closeToolConfig() : closeModal();
     };
     window.addEventListener("keydown", dismissOnEscape);
     return () => window.removeEventListener("keydown", dismissOnEscape);
-  }, [creating, saving, toolDraft, toolTesting]);
+  }, [wizardOpen, saving, toolDraft, toolTesting]);
 
   useEffect(() => {
     if (!modelMenuOpen) return undefined;
@@ -806,6 +812,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   }
 
   function next() {
+    if (readOnly) { setError(""); setStep((value) => Math.min(4, value + 1)); return; }
     const message = validationError(step);
     if (message) { setError(message); return; }
     setError(""); setStep((value) => Math.min(4, value + 1));
@@ -932,7 +939,28 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
   const visibleAgents = agents.filter((agent) => !agentQuery || [agent.agent_name, agent.description, agent.model_id].some((value) => value.toLocaleLowerCase().includes(agentQuery)))
     .sort((left, right) => left.agent_name.localeCompare(right.agent_name, undefined, { sensitivity: "base" }));
 
-  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><div className="card-actions"><button type="button" className="marketplace-icon-button secondary-icon agent-card-action" disabled={saving} onClick={() => openEdit(agent)} aria-label={`Edit ${agent.agent_name}`} title={`Edit ${agent.agent_name}`}><MarketplaceActionIcon name="edit" /></button><button type="button" className="marketplace-icon-button danger-icon agent-card-action" disabled={saving} onClick={() => void removeAgent(agent)} aria-label={`Delete ${agent.agent_name}`} title={`Delete ${agent.agent_name}`}><MarketplaceActionIcon name="trash" /></button></div></div><p title={agent.description || undefined}>{agent.description || "No description provided."}</p><span className="agent-model-tag" title={agent.model_id}>{agent.model_id}</span></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{creating && <div className="agent-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-steps" aria-label={editingAgent ? "Editing progress" : "Creation progress"}>
+  useEffect(() => {
+    const titles = Array.from(document.querySelectorAll<HTMLElement>(".agent-grid .agent-card-heading h2"));
+    const cleanups = titles.map((title, index) => {
+      const agent = visibleAgents[index];
+      if (!agent) return () => undefined;
+      title.tabIndex = 0;
+      title.setAttribute("role", "button");
+      title.setAttribute("aria-label", `View ${agent.agent_name}`);
+      const open = () => openView(agent);
+      const handleKey = (event: KeyboardEvent) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); }
+      };
+      title.addEventListener("click", open);
+      title.addEventListener("keydown", handleKey);
+      return () => { title.removeEventListener("click", open); title.removeEventListener("keydown", handleKey); };
+    });
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [visibleAgents]);
+
+  if (loading) return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div></div><div className="agents-loading" role="status" aria-live="polite"><div className="conversation-loading" aria-hidden="true"><span /><span /><span /></div><p>Loading agents</p></div></div>;
+
+  return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2><div className="card-actions"><button type="button" className="marketplace-icon-button secondary-icon agent-card-action" disabled={saving} onClick={() => openEdit(agent)} aria-label={`Edit ${agent.agent_name}`} title={`Edit ${agent.agent_name}`}><MarketplaceActionIcon name="edit" /></button><button type="button" className="marketplace-icon-button danger-icon agent-card-action" disabled={saving} onClick={() => void removeAgent(agent)} aria-label={`Delete ${agent.agent_name}`} title={`Delete ${agent.agent_name}`}><MarketplaceActionIcon name="trash" /></button></div></div><p title={agent.description || undefined}>{agent.description || "No description provided."}</p><span className="agent-model-tag" title={agent.model_id}>{agent.model_id}</span></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{wizardOpen && <div className={`agent-modal-backdrop ${readOnly ? "read-only-agent" : ""}`} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{readOnly ? "AGENT DETAILS" : editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{readOnly ? viewingAgent?.agent_name : editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={readOnly ? "Close agent details" : editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-navigation-row"><div className="wizard-steps" aria-label={readOnly ? "Agent details sections" : editingAgent ? "Editing progress" : "Creation progress"}>
         {[
           { id: 1, label: "Setup", icon: "details" as const },
           { id: 2, label: "Tools", icon: "tools" as const },
@@ -951,8 +979,8 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
             <span>{tabItem.id}. {tabItem.label}</span>
           </button>
         ))}
-      </div><div className={`agent-wizard ${step === 2 ? "tools-step" : ""}`}>
-    {step === 1 && <div className="setup-step"><section className="setup-details"><div className="setup-section-heading"><span className="marketplace-category">AGENT SETUP</span><h2>Agent details</h2><p>Define the agent identity and model.</p></div><div className="wizard-fields"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} /></label><label>Initiative ID<input value={initiativeId} onChange={(event) => setInitiativeId(event.target.value)} placeholder="Optional initiative identifier" /></label><div className="model-picker" ref={modelPickerRef}><span className="model-picker-label">Model</span><button ref={modelTriggerRef} type="button" className="model-picker-trigger" aria-haspopup="listbox" aria-expanded={modelMenuOpen} onClick={() => { const opening = !modelMenuOpen; setModelMenuOpen(opening); if (opening) requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); }} onKeyDown={(event) => { if (event.key === "Escape") { setModelMenuOpen(false); return; } if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setModelMenuOpen(true); requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); } }}>{selectedModel.label}<span aria-hidden="true">⌄</span></button>{modelMenuOpen && <div className="model-picker-list" role="listbox" aria-label="Model" onKeyDown={handleModelListKey}>{availableModels.map((model) => <button type="button" role="option" aria-selected={model.available && modelId === model.id} key={model.id} disabled={!model.available} className={model.available ? "" : "unavailable"} onClick={() => { setModelId(model.id); setModelMenuOpen(false); modelTriggerRef.current?.focus(); }}><span>{model.label}</span>{!model.available && <small>Coming soon</small>}</button>)}</div>}</div></div></section><section className="setup-prompts"><div className="setup-section-heading"><span className="marketplace-category">PROMPT OPTIONS</span><h2>Prompts</h2><p>Set reusable system and user instructions.</p></div><div className="wizard-fields"><MarkdownPromptEditor label="System prompt" value={systemPrompt} onChange={setSystemPrompt} placeholder="Write system instructions using Markdown" /><MarkdownPromptEditor label="User prompt" value={userPrompt} onChange={setUserPrompt} placeholder="Write a reusable user prompt using Markdown" /></div></section></div>}
+      </div><div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}><MarketplaceActionIcon name={step === 1 ? "close" : "arrow-left"} /><span>{step === 1 ? readOnly ? "Close" : "Cancel" : "Back"}</span></button>{step < 4 ? <button className="primary-button" onClick={next}><span>Continue</span><MarketplaceActionIcon name="arrow-right" /></button> : readOnly ? <button className="primary-button" onClick={closeModal}><MarketplaceActionIcon name="close" /><span>Close</span></button> : <button className="primary-button" onClick={() => void save()} disabled={saving}><MarketplaceActionIcon name={editingAgent ? "save" : "plus"} /><span>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</span></button>}</div></div><div className={`agent-wizard ${step === 1 ? "setup-panel-step" : ""} ${step === 2 ? "tools-step" : ""} ${step === 3 ? "guardrails-panel-step" : ""} ${step === 4 ? "review-step" : ""}`}>
+    {step === 1 && <div className="setup-step"><section className="setup-details"><div className="setup-section-heading"><span className="marketplace-category">AGENT SETUP</span><h2>Agent details</h2><p>Define the agent identity and model.</p></div><div className="wizard-fields"><label>Name<input value={name} onChange={(event) => setName(event.target.value)} readOnly={readOnly} autoFocus={!readOnly} /></label><label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} readOnly={readOnly} rows={3} /></label><label>Initiative ID<input value={initiativeId} onChange={(event) => setInitiativeId(event.target.value)} readOnly={readOnly} placeholder="Optional initiative identifier" /></label><div className="model-picker" ref={modelPickerRef}><span className="model-picker-label">Model</span>{readOnly ? <div className="model-picker-trigger read-only-value">{selectedModel.label}</div> : <><button ref={modelTriggerRef} type="button" className="model-picker-trigger" aria-haspopup="listbox" aria-expanded={modelMenuOpen} onClick={() => { const opening = !modelMenuOpen; setModelMenuOpen(opening); if (opening) requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); }} onKeyDown={(event) => { if (event.key === "Escape") { setModelMenuOpen(false); return; } if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setModelMenuOpen(true); requestAnimationFrame(() => modelPickerRef.current?.querySelector<HTMLButtonElement>('button[role="option"][aria-selected="true"]')?.focus()); } }}>{selectedModel.label}<span aria-hidden="true">⌄</span></button>{modelMenuOpen && <div className="model-picker-list" role="listbox" aria-label="Model" onKeyDown={handleModelListKey}>{availableModels.map((model) => <button type="button" role="option" aria-selected={model.available && modelId === model.id} key={model.id} disabled={!model.available} className={model.available ? "" : "unavailable"} onClick={() => { setModelId(model.id); setModelMenuOpen(false); modelTriggerRef.current?.focus(); }}><span>{model.label}</span>{!model.available && <small>Coming soon</small>}</button>)}</div>}</>}</div></div></section><section className="setup-prompts"><div className="setup-section-heading"><span className="marketplace-category">PROMPT OPTIONS</span><h2>Prompts</h2><p>Set reusable system and user instructions.</p></div><div className="wizard-fields"><MarkdownPromptEditor label="System prompt" value={systemPrompt} onChange={setSystemPrompt} placeholder="Write system instructions using Markdown" readOnly={readOnly} /><MarkdownPromptEditor label="User prompt" value={userPrompt} onChange={setUserPrompt} placeholder="Write a reusable user prompt using Markdown" readOnly={readOnly} /></div></section></div>}
     {step === 2 && (
       <div className="agent-tooling-container">
         <div className="agent-tooling-left">
@@ -962,10 +990,10 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
               <h2>Configured Tools</h2>
               <p>{tools.length} {tools.length === 1 ? "tool" : "tools"} attached to agent</p>
             </div>
-            <button type="button" className="secondary-button" onClick={addTool}>
+            {!readOnly && <button type="button" className="secondary-button" onClick={addTool}>
               <MarketplaceActionIcon name="plus" />
               <span>Inline tool</span>
-            </button>
+            </button>}
           </div>
 
           {tools.length === 0 ? (
@@ -978,7 +1006,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
             <div className="tooling-configured-content">
               <div className="agent-tools-grid">
                 {tools.map((tool, index) => {
-                  const isConfigurable = tool.connection_type !== "mcp";
+                  const isConfigurable = !readOnly && tool.connection_type !== "mcp";
                   return (
                     <article
                       key={index}
@@ -1000,7 +1028,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
                             <span className="marketplace-category">{tool.connection_type === "mcp" ? "MCP" : "Custom"}</span>
                             <h2>{tool.name.trim() || `Untitled tool ${index + 1}`}</h2>
                           </div>
-                          <button
+                          {!readOnly && <button
                             type="button"
                             className="marketplace-icon-button danger-icon"
                             title="Remove tool from agent"
@@ -1011,7 +1039,7 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
                             }}
                           >
                             <MarketplaceActionIcon name="trash" />
-                          </button>
+                          </button>}
                         </div>
                         {tool.description && <p className="agent-tool-card-desc">{tool.description}</p>}
                         <div className="tool-card-footer">
@@ -1097,8 +1125,8 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
                           <button
                             type="button"
                             className={`tool-library-card-action ${isAdded ? "added" : ""}`}
-                            disabled={isAdded && !canConfigure}
-                            onClick={() => handleToolClick(tool)}
+                            disabled={readOnly || (isAdded && !canConfigure)}
+                            onClick={() => !readOnly && handleToolClick(tool)}
                             aria-label={isAdded ? canConfigure ? `Configure ${tool.display_name}` : `${tool.display_name} already added` : `Add ${tool.display_name}`}
                             title={isAdded ? canConfigure ? "Configure tool" : "Already added" : "Add tool"}
                           >
@@ -1115,9 +1143,9 @@ function AgentManager({ agents, onCreated, onUpdated, onDeleted }: { agents: Age
         </div>
       </div>
     )}
-    {step === 3 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to configure.</p></div></div><button type="button" className={selectedGuardrail === "policy" ? "active" : ""} aria-pressed={selectedGuardrail === "policy"} onClick={() => setSelectedGuardrail("policy")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg><span>Guardrail policy</span></button><button type="button" className={selectedGuardrail === "blocked" ? "active" : ""} aria-pressed={selectedGuardrail === "blocked"} onClick={() => setSelectedGuardrail("blocked")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg><span>Blocked topics</span></button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg><span>Out-of-scope response</span></button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "policy" ? <label>Guardrail policy<textarea value={policyText} onChange={(event) => setPolicyText(event.target.value)} rows={9} placeholder="Describe which requests this agent may handle and any restrictions it must enforce." /><small>Every user message is checked against this policy before tools run. The policy is also applied to the final model response.</small></label> : selectedGuardrail === "blocked" ? <label>Blocked topics<textarea value={blockedTopics} onChange={(event) => setBlockedTopics(event.target.value)} rows={8} placeholder="Enter one topic per line" /><small>Requests related to any listed topic are blocked before normal chat or tools run.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} rows={7} placeholder="Response returned when the guardrail blocks a request" /><small>This is the refusal shown after a block; it does not define what should be blocked.</small></label>}</section></div>}
+    {step === 3 && <div className="master-detail"><aside className="master-list guardrail-list"><div className="master-list-heading"><div><h2>Guardrails</h2><p>Select a guardrail to {readOnly ? "view" : "configure"}.</p></div></div><button type="button" className={selectedGuardrail === "policy" ? "active" : ""} aria-pressed={selectedGuardrail === "policy"} onClick={() => setSelectedGuardrail("policy")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg><span>Guardrail policy</span></button><button type="button" className={selectedGuardrail === "blocked" ? "active" : ""} aria-pressed={selectedGuardrail === "blocked"} onClick={() => setSelectedGuardrail("blocked")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg><span>Blocked topics</span></button><button type="button" className={selectedGuardrail === "fallback" ? "active" : ""} aria-pressed={selectedGuardrail === "fallback"} onClick={() => setSelectedGuardrail("fallback")}><svg className="guardrail-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg><span>Out-of-scope response</span></button></aside><section className="detail-panel guardrail-detail">{selectedGuardrail === "policy" ? <label>Guardrail policy<textarea value={policyText} onChange={(event) => setPolicyText(event.target.value)} readOnly={readOnly} rows={9} placeholder="Describe which requests this agent may handle and any restrictions it must enforce." /><small>Every user message is checked against this policy before tools run. The policy is also applied to the final model response.</small></label> : selectedGuardrail === "blocked" ? <label>Blocked topics<textarea value={blockedTopics} onChange={(event) => setBlockedTopics(event.target.value)} readOnly={readOnly} rows={8} placeholder="Enter one topic per line" /><small>Requests related to any listed topic are blocked before normal chat or tools run.</small></label> : <label>Out-of-scope response<textarea value={fallback} onChange={(event) => setFallback(event.target.value)} readOnly={readOnly} rows={7} placeholder="Response returned when the guardrail blocks a request" /><small>This is the refusal shown after a block; it does not define what should be blocked.</small></label>}</section></div>}
     {step === 4 && <div className="review"><div className="review-heading"><span className="marketplace-category">FINAL CHECK</span><h2>{editingAgent ? "Review your changes" : "Review your agent"}</h2><p>Confirm the configuration before saving.</p></div><div className="review-grid"><section className="review-section"><div className="review-section-heading"><span>01</span><h3>Agent details</h3></div><dl className="review-list"><dt>Name</dt><dd>{name}</dd><dt>Description</dt><dd>{description}</dd><dt>Initiative ID</dt><dd>{initiativeId || <span className="review-empty">Not configured</span>}</dd><dt>Model</dt><dd><span className="review-model-tag">{selectedModel.label}</span></dd></dl></section><section className="review-section"><div className="review-section-heading"><span>02</span><h3>Tools &amp; guardrails</h3></div><div className="review-summary-field"><strong>Tools</strong>{tools.length ? <div className="review-tool-tags">{tools.map((tool, index) => <span key={`${tool.name}-${index}`}>{tool.name || `Tool ${index + 1}`}</span>)}</div> : <span className="review-empty">No tools configured</span>}</div><div className="review-summary-field"><strong>Guardrail policy</strong><p>{policyText || <span className="review-empty">Not configured</span>}</p></div><div className="review-summary-field"><strong>Blocked topics</strong><p>{blockedTopics || <span className="review-empty">Not configured</span>}</p></div><div className="review-summary-field"><strong>Fallback response</strong><p>{fallback || <span className="review-empty">Not configured</span>}</p></div></section><section className="review-section review-prompts"><div className="review-section-heading"><span>03</span><h3>Prompts</h3></div><div className="review-prompt-grid"><article><h4>System prompt</h4>{systemPrompt ? <div className="review-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{systemPrompt}</ReactMarkdown></div> : <p className="review-empty">Not configured</p>}</article><article><h4>User prompt</h4>{userPrompt ? <div className="review-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{userPrompt}</ReactMarkdown></div> : <p className="review-empty">Not configured</p>}</article></div></section></div></div>}
-    {error && <div className="error-banner">{error}</div>}<div className="wizard-actions"><button className="secondary-button" onClick={() => step === 1 ? closeModal() : setStep((value) => value - 1)} disabled={saving}><MarketplaceActionIcon name={step === 1 ? "close" : "arrow-left"} /><span>{step === 1 ? "Cancel" : "Back"}</span></button>{step < 4 ? <button className="primary-button" onClick={next}><span>Continue</span><MarketplaceActionIcon name="arrow-right" /></button> : <button className="primary-button" onClick={() => void save()} disabled={saving}><MarketplaceActionIcon name={editingAgent ? "save" : "plus"} /><span>{saving ? editingAgent ? "Saving…" : "Creating…" : editingAgent ? "Save changes" : "Create agent"}</span></button>}</div>
+    {error && <div className="error-banner">{error}</div>}
   </div>{toolDraft && <div className="tool-config-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeToolConfig(); }}><section className="marketplace-dialog tool-config-dialog" role="dialog" aria-modal="true" aria-labelledby="tool-config-title"><div className="agent-modal-header"><div><p className="eyebrow">{toolDraft.tool.tool_definition_id ? "CUSTOM TOOL" : "INLINE TOOL"}</p><h1 id="tool-config-title">{toolDraft.index === null ? "New inline tool" : `Configure ${toolDraft.tool.name || "tool"}`}</h1></div><button type="button" className="marketplace-icon-button close-icon" disabled={toolTesting} onClick={closeToolConfig} aria-label="Close tool configuration" title="Close"><MarketplaceActionIcon name="close" /></button></div><div className="tool-modal-tabs" role="tablist" aria-label="Tool configuration"><button type="button" role="tab" aria-selected={toolConfigTab === "configure"} className={toolConfigTab === "configure" ? "active" : ""} onClick={() => setToolConfigTab("configure")}>Configure</button>{!toolDraft.tool.tool_definition_id && <button type="button" role="tab" aria-selected={toolConfigTab === "test"} className={toolConfigTab === "test" ? "active" : ""} onClick={() => setToolConfigTab("test")}>Test tool</button>}</div>{toolConfigTab === "configure" || toolDraft.tool.tool_definition_id ? <form className="marketplace-form tool-config-form" onSubmit={saveToolConfig}><label>Function name<input required value={toolDraft.tool.name} onChange={(event) => updateToolDraft("name", event.target.value)} /></label><label>Description<textarea required rows={3} value={toolDraft.tool.description} onChange={(event) => updateToolDraft("description", event.target.value)} /></label><PythonEditor value={toolDraft.tool.source_code} onChange={(value) => updateToolDraft("source_code", value)} /><label>Approval policy<select value={toolDraft.tool.approval_policy ?? "automatic"} onChange={(event) => updateToolDraft("approval_policy", event.target.value)}><option value="automatic">Automatic</option><option value="ask">Ask (stored; not executed in v1)</option><option value="disabled">Disabled</option></select></label><label className="checkbox-label"><input type="checkbox" checked={toolDraft.tool.enabled} onChange={(event) => updateToolDraft("enabled", event.target.checked)} />Enabled</label>{toolDraftError && <div className="error-banner" role="alert">{toolDraftError}</div>}<div className="tool-config-actions"><button type="button" className="secondary-button" onClick={closeToolConfig}>Cancel</button><button type="submit" className="primary-button"><MarketplaceActionIcon name="save" /><span>Save tool</span></button></div></form> : <form className="tool-modal-panel tool-test-panel inline-tool-test-panel" role="tabpanel" onSubmit={runInlineToolTest}><div className="tool-test-guide"><strong>Test the current unsaved code</strong><p>Provide a JSON object matching the function arguments. Testing does not save the tool.</p></div><label>Arguments JSON<textarea rows={9} aria-invalid={Boolean(inlineTestInputError)} value={inlineTestInput} onChange={(event) => { setInlineTestInput(event.target.value); setInlineTestInputError(""); }} />{inlineTestInputError && <span className="field-error" role="alert">{inlineTestInputError}</span>}</label><button className="primary-button inline-test-button" disabled={toolTesting}>{toolTesting ? <i className="loading-circle small" aria-hidden="true" /> : <MarketplaceActionIcon name="play" />}<span>{toolTesting ? "Running…" : "Run test"}</span></button>{inlineTestResult && <div className={`test-result ${inlineTestResult.outcome}`}><strong>{inlineTestResult.outcome} · {inlineTestResult.duration_ms}ms</strong><pre>{JSON.stringify(inlineTestResult.output ?? inlineTestResult.error, null, 2)}</pre></div>}</form>}</section></div>}</section></div>}</div>;
 }
 
@@ -1129,6 +1157,7 @@ export default function App() {
   const routeSessionId = conversationRoute?.params.sessionId;
   const view = location.pathname.startsWith("/initiatives") ? "initiatives" : location.pathname === "/agents" ? "agents" : location.pathname === "/marketplace" ? "marketplace" : location.pathname === "/analytics" ? "analytics" : "chat";
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
   const [selectedAgent, setSelectedAgent] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | undefined>();
@@ -1141,6 +1170,7 @@ export default function App() {
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
+  const agentPickerRef = useRef<HTMLDivElement>(null);
   const conversationLoadControllerRef = useRef<AbortController | null>(null);
   const routeDraftRef = useRef<Conversation | null>(null);
   const active = conversations.find((conversation) => conversation.id === activeId);
@@ -1155,7 +1185,7 @@ export default function App() {
     getAgents().then((items) => {
       setAgents(items);
       setSelectedAgent(items[0]?.agent_id ?? "");
-    }).catch((reason: Error) => setError(reason.message));
+    }).catch((reason: Error) => setError(reason.message)).finally(() => setAgentsLoading(false));
   }, []);
 
   useEffect(() => {
@@ -1167,6 +1197,15 @@ export default function App() {
       });
     }).catch((reason: Error) => setError(reason.message)).finally(() => setConversationsLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!agentPickerOpen) return undefined;
+    const dismissAgentPicker = (event: PointerEvent) => {
+      if (!agentPickerRef.current?.contains(event.target as Node)) setAgentPickerOpen(false);
+    };
+    window.addEventListener("pointerdown", dismissAgentPicker);
+    return () => window.removeEventListener("pointerdown", dismissAgentPicker);
+  }, [agentPickerOpen]);
 
   useEffect(() => {
     if (conversationsLoading || view !== "chat") return;
@@ -1409,7 +1448,7 @@ export default function App() {
     </aside>
     <section className={view === "chat" ? "workspace" : "workspace content-workspace"}>
       <Routes><Route path="/" element={<Navigate to="/chat" replace />} /><Route path="/chat" element={null} /><Route path="/conversations/:sessionId" element={null} /><Route path="/agents" element={null} /><Route path="/initiatives" element={null} /><Route path="/initiatives/new" element={null} /><Route path="/initiatives/:initiativeId" element={null} /><Route path="/initiatives/:initiativeId/edit" element={null} /><Route path="/marketplace" element={null} /><Route path="/analytics" element={null} /><Route path="*" element={<Navigate to="/chat" replace />} /></Routes>
-      {view === "initiatives" ? <InitiativeManagement /> : view === "agents" ? <AgentManager agents={agents} onCreated={agentCreated} onUpdated={agentUpdated} onDeleted={agentDeleted} /> : view === "marketplace" ? <ToolLibraryMarketplace agents={agents} onUpdated={agentUpdated} /> : view === "analytics" ? <AnalyticsDashboard /> : <>
+      {view === "initiatives" ? <InitiativeManagement /> : view === "agents" ? <AgentManager agents={agents} loading={agentsLoading} onCreated={agentCreated} onUpdated={agentUpdated} onDeleted={agentDeleted} /> : view === "marketplace" ? <ToolLibraryMarketplace agents={agents} onUpdated={agentUpdated} /> : view === "analytics" ? <AnalyticsDashboard /> : <>
       <header className="topbar"><span className="conversation-model" title={conversationModelId}>{conversationModelId}</span><span className="topbar-divider" aria-hidden="true" /><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
       <div ref={chatBodyRef} className={active?.messages.length || activeConversationLoading ? "chat-body transcript" : "chat-body welcome"}>
         {activeConversationLoading && <div className="transcript-loading" role="status" aria-label="Loading conversation"><span /><span /><span /><p>Loading conversation</p></div>}
@@ -1419,7 +1458,7 @@ export default function App() {
         {(active?.executionEvents?.length ?? 0) > 0 && <LiveExecutionTrace events={active?.executionEvents ?? []} agentName={active?.executionAgentName ?? conversationAgentName} status={active?.executionStatus ?? "running"} />}
         {error && <div className="error-banner">{error}</div>}
       </div>
-      <form className="composer-wrap" onSubmit={submit}><div className="composer"><div className="agent-picker-wrap"><button type="button" className="icon-button" aria-label="Choose agent" aria-expanded={agentPickerOpen} onClick={() => setAgentPickerOpen((open) => !open)}>+</button>{agentPickerOpen && <div className="agent-picker" role="listbox" aria-label="Choose an agent">{agents.map((agent) => <button type="button" key={agent.agent_id} className={agent.agent_id === selectedAgent ? "agent-option active" : "agent-option"} onClick={() => selectAgent(agent.agent_id)} role="option" aria-selected={agent.agent_id === selectedAgent}><span>{agent.agent_name}</span><small>{agent.model_id}</small></button>)}</div>}</div><span className="selected-agent" aria-live="polite" title={selectedAgentName}>{selectedAgentName}</span><textarea ref={textareaRef} value={prompt} onChange={(event) => updatePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(event); } }} placeholder={activeConversationLoading ? "Loading conversation..." : activeHistoryPending ? "Select the conversation again to retry" : selectedAgent ? `Ask ${selectedAgentName} anything...` : "Select an agent to begin"} disabled={!selectedAgent || streaming || activeHistoryPending} rows={1} /><button type="submit" className="send-button" aria-label="Send message" disabled={!prompt.trim() || !selectedAgent || streaming || activeHistoryPending}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-5 5m5-5 5 5" /></svg></button></div><p>AI Harness may make mistakes. Check important information.</p></form>
+      <form className="composer-wrap" onSubmit={submit}><div className="composer"><div className="agent-picker-wrap" ref={agentPickerRef}><button type="button" className="icon-button" aria-label="Choose agent" aria-expanded={agentPickerOpen} onClick={() => setAgentPickerOpen((open) => !open)}>+</button>{agentPickerOpen && <div className="agent-picker" role="listbox" aria-label="Choose an agent">{agents.map((agent) => <button type="button" key={agent.agent_id} className={agent.agent_id === selectedAgent ? "agent-option active" : "agent-option"} onClick={() => selectAgent(agent.agent_id)} role="option" aria-selected={agent.agent_id === selectedAgent}><span>{agent.agent_name}</span><small>{agent.model_id}</small></button>)}</div>}</div><span className="selected-agent" aria-live="polite" title={selectedAgentName}>{selectedAgentName}</span><textarea ref={textareaRef} value={prompt} onChange={(event) => updatePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(event); } }} placeholder={activeConversationLoading ? "Loading conversation..." : activeHistoryPending ? "Select the conversation again to retry" : selectedAgent ? `Ask ${selectedAgentName} anything...` : "Select an agent to begin"} disabled={!selectedAgent || streaming || activeHistoryPending} rows={1} /><button type="submit" className="send-button" aria-label="Send message" disabled={!prompt.trim() || !selectedAgent || streaming || activeHistoryPending}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-5 5m5-5 5 5" /></svg></button></div><p>AI Harness may make mistakes. Check important information.</p></form>
       </>}
     </section>
   </main>;
