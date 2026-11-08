@@ -674,3 +674,29 @@ tbody tr { height:52px; }.table-primary { font-weight:var(--font-semibold) !impo
   .composer textarea { grid-row:1; grid-column:2; min-width:0; min-height:56px; padding:13px 6px; }
   .composer .send-button { grid-row:1; grid-column:3; }
 }
+
+/* Compact mobile actions, agent wizard navigation, and analytics KPI tiles. */
+@media (max-width:760px) {
+  .agent-header-actions { display:grid; grid-template-columns:minmax(0,1fr) 42px; align-items:end; gap:10px; }
+  .agent-header-actions .agent-search { width:100%; }
+  .agent-header-actions>.primary-button,
+  .content-page:has(> .analytics-summary) .content-page-header>.secondary-button { display:grid; width:42px; min-width:42px; height:42px; min-height:42px; padding:0; place-items:center; align-self:flex-start; overflow:hidden; border-radius:10px; font-size:0 !important; }
+  .agent-header-actions>.primary-button::before { content:"+"; font-size:24px; font-weight:400; line-height:1; }
+  .content-page:has(> .analytics-summary) .content-page-header>.secondary-button::before { content:"↻"; font-size:22px; font-weight:500; line-height:1; }
+
+  .agent-modal .wizard-navigation-row { gap:10px; }
+  .agent-modal .wizard-navigation-row .wizard-steps { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; width:100%; padding:0; overflow:visible; }
+  .agent-modal .wizard-navigation-row .wizard-step-tab { display:flex; min-width:0; min-height:58px; padding:6px 2px; flex-direction:column; justify-content:center; gap:3px; border-radius:8px; font-size:10px !important; line-height:1.15 !important; text-align:center; white-space:normal; }
+  .agent-modal .wizard-navigation-row .wizard-step-icon { width:18px; height:18px; }
+  .agent-modal .wizard-navigation-row .wizard-actions { width:100%; align-self:stretch; justify-content:flex-end; gap:8px; }
+  .agent-modal .wizard-navigation-row .wizard-actions .primary-button,
+  .agent-modal .wizard-navigation-row .wizard-actions .secondary-button { flex:0 0 44px; width:44px; min-width:44px; height:44px; min-height:44px; padding:0; border-radius:10px; }
+  .agent-modal .wizard-navigation-row .wizard-actions button>span { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; border:0; clip:rect(0,0,0,0); white-space:nowrap; }
+  .agent-modal .wizard-navigation-row .wizard-actions .marketplace-action-icon { width:19px; height:19px; }
+
+  .analytics-summary { grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+  .analytics-summary article { min-width:0; min-height:88px; align-content:start; gap:5px; padding:10px; border-radius:11px; }
+  .analytics-summary span { overflow-wrap:anywhere; font-size:11px !important; line-height:1.2 !important; }
+  .analytics-summary strong,
+  .analytics-summary .cost-unavailable { min-width:0; overflow-wrap:anywhere; font-size:1.15rem !important; line-height:1.15 !important; white-space:normal; }
+}
