@@ -1,5 +1,5 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { getAuthConfig, getCurrentUser, logoutCurrentUser, setAuthToken, setUnauthorizedHandler } from "./api";
+import { getAuthConfig, getCurrentUser, logoutCurrentUser, setAuthEnabled as setApiAuthEnabled, setAuthToken, setUnauthorizedHandler } from "./api";
 import type { AuthenticatedUser } from "./types";
 
 const TOKEN_KEY = "ai-harness.google-id-token";
@@ -102,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const config = await getAuthConfig();
         if (!active) return;
+        setApiAuthEnabled(config.auth_enabled);
         setAuthEnabled(config.auth_enabled);
         if (!config.auth_enabled) {
           setAuthToken(null);

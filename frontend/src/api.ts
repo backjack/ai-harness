@@ -2,10 +2,15 @@ import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, AuthenticatedUse
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 let accessToken: string | null = null;
+let authenticationEnabled = true;
 let unauthorizedHandler: (() => void) | null = null;
 
 export function setAuthToken(token: string | null): void {
   accessToken = token;
+}
+
+export function setAuthEnabled(enabled: boolean): void {
+  authenticationEnabled = enabled;
 }
 
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
@@ -14,6 +19,10 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
 
 async function apiFetch(path: string, init: RequestInit = {}, authenticated = true): Promise<Response> {
   const headers = new Headers(init.headers);
+  if (authenticated && authenticationEnabled && !accessToken) {
+    unauthorizedHandler?.();
+    throw new Error("Authentication required");
+  }
   if (authenticated && accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   const response = await fetch(`${baseUrl}${path}`, { ...init, headers });
   if (authenticated && response.status === 401) unauthorizedHandler?.();

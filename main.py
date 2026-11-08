@@ -59,7 +59,7 @@ app.include_router(service_status_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(agents_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(analytics_router, prefix="/api", dependencies=[Depends(get_current_user)])
-app.include_router(conversations_router, prefix="/api")
+app.include_router(conversations_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(tool_library_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.mount(
     "/api/docs-assets",
