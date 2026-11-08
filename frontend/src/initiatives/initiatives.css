@@ -188,6 +188,28 @@
 .initiative-governance-disclaimer { margin:12px 0 0; padding:10px 12px; border-left:3px solid #d4b779; border-radius:7px; background:#fffaf0; color:#745b22; font-size:12px; }
 @media (max-width:760px) { .initiative-detail-section { padding:15px; }.initiative-current-status { align-items:flex-start; flex-direction:column; }.initiative-status-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 
+@media (max-width:760px) {
+  .initiative-page { min-width:0; padding:24px 16px calc(40px + env(safe-area-inset-bottom)); }
+  .initiative-page-header h1,.initiative-detail-header h1 { font-size:var(--font-2xl) !important; }
+  .initiative-page-header>div,.initiative-detail-header>div,.initiative-primary-actions,.initiative-list-toolbar>div { min-width:0; width:100%; }
+  .initiative-primary-actions,.initiative-form-actions { display:flex; flex-wrap:wrap; gap:10px; }
+  .initiative-primary-actions button,.initiative-form-actions button { min-height:44px; }
+  .initiative-table-wrap { max-width:100%; overflow-x:auto; overscroll-behavior-inline:contain; -webkit-overflow-scrolling:touch; }
+  .initiative-table { min-width:720px; }
+  .initiative-detail-table { min-width:680px; }
+  .initiative-dialog-backdrop { padding:12px; }
+  .initiative-dialog { width:100%; max-height:calc(100dvh - 24px); padding:18px; overflow-y:auto; }
+  .initiative-tabs { overflow-x:auto; scrollbar-width:thin; }
+  .initiative-tabs button { flex:0 0 auto; min-height:44px; white-space:nowrap; }
+  .initiative-chart { min-width:0; padding:14px; overflow-x:auto; }
+  .initiative-review dl>div { grid-template-columns:1fr; }
+}
+
+@media (max-width:420px) {
+  .initiative-status-kpis { grid-template-columns:1fr; }
+  .initiative-primary-actions button,.initiative-form-actions button { flex:1 1 100%; }
+}
+
 /* Initiative-specific semantic typography */
 .initiative-page-header h1,.initiative-detail-header h1 { color:var(--text-primary) !important; font-family:var(--token-font-family-secondary) !important; font-size:var(--font-2xl) !important; font-weight:var(--font-bold) !important; line-height:1.25 !important; letter-spacing:-.35px; }
 .initiative-page-header p:not(.eyebrow),.initiative-detail-header>div>p,.initiative-section-heading p { color:var(--text-muted); font-size:var(--font-base) !important; line-height:1.5 !important; }
@@ -203,3 +225,28 @@
 .initiative-dialog h2 { color:var(--text-primary) !important; font-size:20px !important; font-weight:var(--font-bold) !important; line-height:28px !important; }
 .initiative-overview-grid h2,.initiative-governance-grid h2,.initiative-tab-panel h2,.initiative-chart h3,.initiative-subheading,.initiative-review h3 { color:var(--text-primary) !important; font-size:var(--font-md) !important; font-weight:var(--font-bold) !important; line-height:1.5 !important; }
 .initiative-section-heading h2,.initiative-detail-section>.initiative-section-heading h2 { color:var(--text-primary) !important; font-size:var(--font-xl) !important; font-weight:var(--font-bold) !important; line-height:1.3 !important; }
+
+.initiative-action-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; }
+.initiative-action-icon { display:none; }
+
+@media (max-width:760px) {
+  .initiative-page-header .initiative-primary-actions,
+  .initiative-detail-header .initiative-primary-actions { width:auto; align-self:flex-start; flex-wrap:nowrap; gap:8px; }
+  .initiative-primary-actions .initiative-action-button { flex:0 0 42px; width:42px; min-width:42px; min-height:42px; height:42px; padding:0; border-radius:10px; }
+  .initiative-action-icon { display:grid; place-items:center; }
+  .initiative-action-icon .initiative-icon { width:19px; height:19px; }
+  .initiative-action-label { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; border:0; clip:rect(0,0,0,0); white-space:nowrap; }
+
+  .initiative-status-kpis { grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+  .initiative-status-kpis article { display:grid; grid-template-columns:1fr; align-content:start; gap:7px; min-height:112px; padding:10px; border-radius:11px; }
+  .initiative-status-kpis .initiative-kpi-icon { width:30px; height:30px; border-radius:8px; }
+  .initiative-status-kpis .initiative-kpi-icon .initiative-icon { width:17px; height:17px; }
+  .initiative-status-kpis article>div { gap:1px; }
+  .initiative-status-kpis article>div>span { font-size:11px !important; line-height:1.2 !important; }
+  .initiative-status-kpis strong { font-size:1.35rem !important; line-height:1.15 !important; }
+  .initiative-status-kpis small { display:none; }
+}
+
+@media (max-width:389px) {
+  .initiative-status-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}

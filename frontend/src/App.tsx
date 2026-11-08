@@ -542,16 +542,22 @@ function ToolLibraryMarketplace({ agents, onUpdated }: { agents: Agent[]; onUpda
   </section>;
 }
 
+const ANALYTICS_CHART_FONT = '"Source Sans 3", sans-serif';
+const ANALYTICS_AXIS_LABEL_STYLE: Highcharts.CSSObject = { color: "#536577", fontFamily: ANALYTICS_CHART_FONT, fontSize: "12px", fontWeight: "400" };
+const ANALYTICS_AXIS_TITLE_STYLE: Highcharts.CSSObject = { color: "#102D4E", fontFamily: ANALYTICS_CHART_FONT, fontSize: "13px", fontWeight: "600" };
+const ANALYTICS_LEGEND_STYLE: Highcharts.CSSObject = { color: "#102D4E", fontFamily: ANALYTICS_CHART_FONT, fontSize: "12px", fontWeight: "600" };
+
 function columnChart(title: string, categories: string[], series: Array<{ name: string; data: number[] }>, valueSuffix = ""): Highcharts.Options {
   return {
-    chart: { type: "column", backgroundColor: "transparent" },
-    title: { text: title, align: "left", style: { color: "#0D2B49", fontSize: "18px", fontWeight: "700" } },
-    xAxis: { categories, crosshair: true, labels: { style: { color: "#5f666b" } } },
-    yAxis: { min: 0, title: { text: "" }, labels: { style: { color: "#858A8E" } } },
-    legend: { enabled: series.length > 1 },
-    tooltip: { shared: true, valueSuffix },
+    chart: { type: "column", backgroundColor: "transparent", height: 330, style: { fontFamily: ANALYTICS_CHART_FONT } },
+    title: { text: title, align: "left", margin: 18, style: { color: "#102D4E", fontFamily: ANALYTICS_CHART_FONT, fontSize: "16px", fontWeight: "600" } },
+    xAxis: { categories, crosshair: true, labels: { autoRotation: [-35, -60], style: ANALYTICS_AXIS_LABEL_STYLE }, title: { style: ANALYTICS_AXIS_TITLE_STYLE } },
+    yAxis: { min: 0, title: { text: "", style: ANALYTICS_AXIS_TITLE_STYLE }, labels: { style: ANALYTICS_AXIS_LABEL_STYLE } },
+    legend: { enabled: series.length > 1, itemStyle: ANALYTICS_LEGEND_STYLE, itemHoverStyle: { color: "#235B91" } },
+    tooltip: { shared: true, valueSuffix, style: { color: "#102D4E", fontFamily: ANALYTICS_CHART_FONT, fontSize: "12px" } },
     credits: { enabled: false },
     colors: ["#2A5A94", "#CA714C", "#0D2B49"],
+    plotOptions: { series: { dataLabels: { style: { color: "#102D4E", fontFamily: ANALYTICS_CHART_FONT, fontSize: "11px", fontWeight: "600", textOutline: "none" } } } },
     series: series.map((item) => ({ type: "column", name: item.name, data: item.data })),
   };
 }
@@ -580,16 +586,17 @@ function AnalyticsTrendChart({ report, selectedModels, days }: { report: Analyti
   });
 
   const options: Highcharts.Options = {
-    chart: { type: "line", backgroundColor: "transparent", height: 390 },
-    title: { text: "Daily token usage and estimated cost by model", align: "left", style: { color: "#0D2B49", fontSize: "18px", fontWeight: "700" } },
-    xAxis: { type: "datetime", title: { text: "Date" }, labels: { format: "{value:%b %e}", style: { color: "#5f666b" } }, crosshair: true },
+    chart: { type: "line", backgroundColor: "transparent", height: 390, style: { fontFamily: ANALYTICS_CHART_FONT } },
+    title: { text: "Daily token usage and estimated cost by model", align: "left", margin: 18, style: { color: "#102D4E", fontFamily: ANALYTICS_CHART_FONT, fontSize: "18px", fontWeight: "600" } },
+    xAxis: { type: "datetime", title: { text: "Date", style: ANALYTICS_AXIS_TITLE_STYLE }, labels: { format: "{value:%b %e}", style: ANALYTICS_AXIS_LABEL_STYLE }, crosshair: true },
     yAxis: [
-      { min: 0, title: { text: "Total tokens" }, labels: { style: { color: "#858A8E" } } },
-      { min: 0, title: { text: "Estimated cost (USD)" }, labels: { format: "${value:.4f}", style: { color: "#858A8E" } }, opposite: true },
+      { min: 0, title: { text: "Total tokens", style: ANALYTICS_AXIS_TITLE_STYLE }, labels: { style: ANALYTICS_AXIS_LABEL_STYLE } },
+      { min: 0, title: { text: "Estimated cost (USD)", style: ANALYTICS_AXIS_TITLE_STYLE }, labels: { format: "${value:.4f}", style: ANALYTICS_AXIS_LABEL_STYLE }, opposite: true },
     ],
-    legend: { enabled: true },
-    tooltip: { shared: true, xDateFormat: "%b %e, %Y" },
+    legend: { enabled: true, itemStyle: ANALYTICS_LEGEND_STYLE, itemHoverStyle: { color: "#235B91" } },
+    tooltip: { shared: true, xDateFormat: "%b %e, %Y", style: { color: "#102D4E", fontFamily: ANALYTICS_CHART_FONT, fontSize: "12px" } },
     credits: { enabled: false },
+    plotOptions: { series: { dataLabels: { style: { color: "#102D4E", fontFamily: ANALYTICS_CHART_FONT, fontSize: "11px", fontWeight: "600", textOutline: "none" } } } },
     series,
   };
 
@@ -1168,9 +1175,11 @@ export default function App() {
   const [conversationsLoading, setConversationsLoading] = useState(true);
   const [conversationLoadingId, setConversationLoadingId] = useState<string>();
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatBodyRef = useRef<HTMLDivElement>(null);
   const agentPickerRef = useRef<HTMLDivElement>(null);
+  const mobileMenuRef = useRef<HTMLButtonElement>(null);
   const conversationLoadControllerRef = useRef<AbortController | null>(null);
   const routeDraftRef = useRef<Conversation | null>(null);
   const active = conversations.find((conversation) => conversation.id === activeId);
@@ -1180,6 +1189,7 @@ export default function App() {
   const sidebarConversations = localDraft ? [localDraft, ...savedConversations] : savedConversations;
   const selectedAgentName = agents.find((agent) => agent.agent_id === selectedAgent)?.agent_name ?? "Choose an agent";
   const conversationTitle = active?.messages.find((message) => message.role === "user")?.content ?? active?.title ?? "New conversation";
+  const mobilePageTitle = view === "agents" ? "Agents" : view === "initiatives" ? "Initiatives" : view === "marketplace" ? "Marketplace" : view === "analytics" ? "Analytics" : conversationTitle;
 
   useEffect(() => {
     getAgents().then((items) => {
@@ -1206,6 +1216,27 @@ export default function App() {
     window.addEventListener("pointerdown", dismissAgentPicker);
     return () => window.removeEventListener("pointerdown", dismissAgentPicker);
   }, [agentPickerOpen]);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileNavOpen(false);
+        requestAnimationFrame(() => mobileMenuRef.current?.focus());
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileNavOpen]);
 
   useEffect(() => {
     if (conversationsLoading || view !== "chat") return;
@@ -1433,11 +1464,14 @@ export default function App() {
   const activeConversationLoading = conversationLoadingId === active?.id;
   const activeHistoryPending = Boolean(active?.sessionId && !active.historyLoaded);
   const headerAgent = agents.find((agent) => agent.agent_id === active?.agentId) ?? (!active?.sessionId ? agents.find((agent) => agent.agent_id === selectedAgent) : undefined);
+  const isEmptyConversation = !activeConversationLoading && !active?.messages.length;
   const conversationModelId = headerAgent?.model_id ?? (activeHistoryPending || activeConversationLoading ? "Loading model…" : "No model selected");
 
+  const composer = <form className="composer-wrap" onSubmit={submit}><div className="composer"><div className="agent-picker-wrap" ref={agentPickerRef}><button type="button" className="agent-picker-trigger" aria-label={`Choose agent, currently ${selectedAgentName}`} title={selectedAgentName} aria-expanded={agentPickerOpen} onClick={() => setAgentPickerOpen((open) => !open)}><span className="agent-picker-plus" aria-hidden="true">+</span><span className="selected-agent-name">{selectedAgentName}</span><span className="selected-agent-acronym" aria-hidden="true">{selectedAgent ? agentInitials(selectedAgentName) : "AI"}</span></button>{agentPickerOpen && <div className="agent-picker" role="listbox" aria-label="Choose an agent">{agents.map((agent) => <button type="button" key={agent.agent_id} className={agent.agent_id === selectedAgent ? "agent-option active" : "agent-option"} onClick={() => selectAgent(agent.agent_id)} role="option" aria-selected={agent.agent_id === selectedAgent}><span>{agent.agent_name}</span><small>{agent.model_id}</small></button>)}</div>}</div><textarea ref={textareaRef} value={prompt} onChange={(event) => updatePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(event); } }} placeholder={activeConversationLoading ? "Loading conversation..." : activeHistoryPending ? "Select the conversation again to retry" : selectedAgent ? `Ask ${selectedAgentName} anything...` : "Select an agent to begin"} disabled={!selectedAgent || streaming || activeHistoryPending} rows={1} /><button type="submit" className="send-button" aria-label="Send message" disabled={!prompt.trim() || !selectedAgent || streaming || activeHistoryPending}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-5 5m5-5 5 5" /></svg></button></div><p>AI Harness may make mistakes. Check important information.</p></form>;
+
   return <main className="app-shell">
-    <aside className={sidebarExpanded ? "sidebar expanded" : "sidebar"} onPointerEnter={() => setSidebarExpanded(true)} onPointerLeave={() => setSidebarExpanded(false)} onPointerUp={(event) => { if ((event.target as Element).closest("button,a")) setSidebarExpanded(false); }} onFocusCapture={() => setSidebarExpanded(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSidebarExpanded(false); }}>
-      <div className="brand"><span className="brand-monogram" title="Deln Bank" aria-label="Deln Bank">A</span><span className="brand-name">AI Harness</span></div>
+    <aside id="mobile-navigation" aria-label="Application navigation" className={`${sidebarExpanded || mobileNavOpen ? "sidebar expanded" : "sidebar"}${mobileNavOpen ? " mobile-open" : ""}`} onPointerEnter={() => setSidebarExpanded(true)} onPointerLeave={() => setSidebarExpanded(false)} onPointerUp={(event) => { if ((event.target as Element).closest("button,a")) { setSidebarExpanded(false); setMobileNavOpen(false); } }} onFocusCapture={() => setSidebarExpanded(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSidebarExpanded(false); }}>
+      <div className="brand"><span className="brand-monogram" title="Deln Bank" aria-label="Deln Bank">A</span><span className="brand-name">AI Harness</span><button type="button" className="mobile-drawer-close" onClick={() => { setMobileNavOpen(false); requestAnimationFrame(() => mobileMenuRef.current?.focus()); }} aria-label="Close navigation"><MarketplaceActionIcon name="close" /></button></div>
       <button className="new-chat" onClick={newChat} aria-label="New chat" title="New chat"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg><span className="sidebar-label">New chat</span></button>
       <nav className="nav-links"><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/agents" title="Agents"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6M12 4V2M7 7h10a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-7a3 3 0 0 1 3-3Z" /><circle cx="9" cy="13" r="1" /><circle cx="15" cy="13" r="1" /><path d="M9 17h6" /></svg><span className="sidebar-label">Agents</span></NavLink><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/initiatives" title="Initiatives"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" /></svg><span className="sidebar-label">Initiatives</span></NavLink><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/marketplace" title="Marketplace"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16l-1 11H5L4 9Z" /><path d="M8 9V6a4 4 0 0 1 8 0v3" /></svg><span className="sidebar-label">Marketplace</span></NavLink><NavLink className={({ isActive }) => isActive ? "nav-item active" : "nav-item"} to="/analytics" title="Analytics"><svg className="menu-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16" /><path d="m7 15 4-4 3 2 5-6" /></svg><span className="sidebar-label">Analytics</span></NavLink></nav>
       <section className="conversation-history" aria-label="Conversations">
@@ -1446,19 +1480,21 @@ export default function App() {
       </section>
       <div className="profile" title={authEnabled ? user.email : `Static user ${user.email}`}><span className="avatar" title={user.name}>{user.name.charAt(0).toUpperCase()}</span><span className="profile-identity"><span className="profile-name">{user.name}</span><span className="profile-email">{user.email}</span>{!authEnabled&&<span className="profile-mode">Static user</span>}</span>{authEnabled&&<button type="button" className="profile-logout" title="Log out" aria-label={`Log out ${user.name}`} disabled={signingOut} onClick={()=>void signOut()}>{signingOut?<i className="loading-circle small" aria-hidden="true"/>:<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h5M14 8l4 4-4 4M8 12h10"/></svg>}</button>}</div>
     </aside>
+    {mobileNavOpen && <button type="button" className="mobile-nav-backdrop" onClick={() => { setMobileNavOpen(false); requestAnimationFrame(() => mobileMenuRef.current?.focus()); }} aria-label="Close navigation" />}
     <section className={view === "chat" ? "workspace" : "workspace content-workspace"}>
+      {view !== "chat" && <header className="mobile-topbar"><button ref={mobileMenuRef} type="button" className="mobile-menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-controls="mobile-navigation" aria-expanded={mobileNavOpen}><span /><span /><span /></button><span className="mobile-page-label">{mobilePageTitle}</span></header>}
       <Routes><Route path="/" element={<Navigate to="/chat" replace />} /><Route path="/chat" element={null} /><Route path="/conversations/:sessionId" element={null} /><Route path="/agents" element={null} /><Route path="/initiatives" element={null} /><Route path="/initiatives/new" element={null} /><Route path="/initiatives/:initiativeId" element={null} /><Route path="/initiatives/:initiativeId/edit" element={null} /><Route path="/marketplace" element={null} /><Route path="/analytics" element={null} /><Route path="*" element={<Navigate to="/chat" replace />} /></Routes>
       {view === "initiatives" ? <InitiativeManagement /> : view === "agents" ? <AgentManager agents={agents} loading={agentsLoading} onCreated={agentCreated} onUpdated={agentUpdated} onDeleted={agentDeleted} /> : view === "marketplace" ? <ToolLibraryMarketplace agents={agents} onUpdated={agentUpdated} /> : view === "analytics" ? <AnalyticsDashboard /> : <>
-      <header className="topbar"><span className="conversation-model" title={conversationModelId}>{conversationModelId}</span><span className="topbar-divider" aria-hidden="true" /><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
-      <div ref={chatBodyRef} className={active?.messages.length || activeConversationLoading ? "chat-body transcript" : "chat-body welcome"}>
+      <header className="topbar"><button ref={mobileMenuRef} type="button" className="mobile-menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-controls="mobile-navigation" aria-expanded={mobileNavOpen}><span /><span /><span /></button><span className="conversation-model" title={conversationModelId}>{conversationModelId}</span><span className="topbar-divider" aria-hidden="true" /><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
+      <div ref={chatBodyRef} className={!isEmptyConversation ? "chat-body transcript" : "chat-body welcome"}>
         {activeConversationLoading && <div className="transcript-loading" role="status" aria-label="Loading conversation"><span /><span /><span /><p>Loading conversation</p></div>}
-        {!activeConversationLoading && !active?.messages.length && <div className="welcome-content"><p className="eyebrow">AI HARNESS</p><h1>Where should we start?</h1><p>Ask your configured AI agent anything.</p><div className="suggestions"><button onClick={() => setPrompt("Analyse my portfolio allocation")}>Analyse my portfolio allocation</button><button onClick={() => setPrompt("Get the latest price for AAPL")}>Get a current stock price</button><button onClick={() => setPrompt("Calculate my net worth with stock holdings")}>Calculate my net worth with stock holdings</button></div></div>}
+        {isEmptyConversation && <div className="empty-conversation"><div className="welcome-content"><p className="eyebrow">AI HARNESS</p><h1>Where should we start?</h1><p>Ask your configured AI agent anything.</p><div className="suggestions"><button onClick={() => setPrompt("Analyse my portfolio allocation")}>Analyse my portfolio allocation</button><button onClick={() => setPrompt("Get the latest price for AAPL")}>Get a current stock price</button><button onClick={() => setPrompt("Calculate my net worth with stock holdings")}>Calculate my net worth with stock holdings</button></div></div>{composer}</div>}
         {active?.messages.map((message, index) => <article key={`${message.role}-${index}`} className={`message ${message.role}`}><div className="message-card"><div className="message-meta">{message.role === "assistant" ? <><span className="agent-avatar" aria-hidden="true">{agentInitials(conversationAgentName)}</span><span className="agent-status" title="Available" aria-label="Available" /><span>{conversationAgentName}</span></> : <span className="user-avatar">You</span>}</div>{message.response ? <MessageContent message={message.response} /> : <div className="message-text">{message.content}</div>}<time className="message-time">{formatMessageTime(message.createdAt) ?? "Just now"}</time>{message.role === "assistant" && message.response && <MessageActions message={message.response} executionEvents={message.executionEvents} executionAgentName={message.executionAgentName} executionStatus={message.executionStatus} />}</div></article>)}
         {showTypingIndicator && <AssistantTypingIndicator agentName={active?.executionAgentName ?? conversationAgentName} />}
         {(active?.executionEvents?.length ?? 0) > 0 && <LiveExecutionTrace events={active?.executionEvents ?? []} agentName={active?.executionAgentName ?? conversationAgentName} status={active?.executionStatus ?? "running"} />}
         {error && <div className="error-banner">{error}</div>}
       </div>
-      <form className="composer-wrap" onSubmit={submit}><div className="composer"><div className="agent-picker-wrap" ref={agentPickerRef}><button type="button" className="icon-button" aria-label="Choose agent" aria-expanded={agentPickerOpen} onClick={() => setAgentPickerOpen((open) => !open)}>+</button>{agentPickerOpen && <div className="agent-picker" role="listbox" aria-label="Choose an agent">{agents.map((agent) => <button type="button" key={agent.agent_id} className={agent.agent_id === selectedAgent ? "agent-option active" : "agent-option"} onClick={() => selectAgent(agent.agent_id)} role="option" aria-selected={agent.agent_id === selectedAgent}><span>{agent.agent_name}</span><small>{agent.model_id}</small></button>)}</div>}</div><span className="selected-agent" aria-live="polite" title={selectedAgentName}>{selectedAgentName}</span><textarea ref={textareaRef} value={prompt} onChange={(event) => updatePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(event); } }} placeholder={activeConversationLoading ? "Loading conversation..." : activeHistoryPending ? "Select the conversation again to retry" : selectedAgent ? `Ask ${selectedAgentName} anything...` : "Select an agent to begin"} disabled={!selectedAgent || streaming || activeHistoryPending} rows={1} /><button type="submit" className="send-button" aria-label="Send message" disabled={!prompt.trim() || !selectedAgent || streaming || activeHistoryPending}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-5 5m5-5 5 5" /></svg></button></div><p>AI Harness may make mistakes. Check important information.</p></form>
+      {!isEmptyConversation && composer}
       </>}
     </section>
   </main>;
