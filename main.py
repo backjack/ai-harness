@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from controllers.analytics import router as analytics_router
+from controllers.admin import router as admin_router
 from controllers.auth import router as auth_router
 from controllers.agents import router as agents_router
 from controllers.conversations import router as conversations_router
@@ -39,6 +40,7 @@ app = FastAPI(
         {"name": "analytics", "description": "Usage and token-cost reporting."},
         {"name": "conversations", "description": "Recent user conversation summaries."},
         {"name": "authentication", "description": "Google OIDC authentication."},
+        {"name": "administration", "description": "Application access management."},
     ],
 )
 cors_origins = [
@@ -57,6 +59,7 @@ app.add_middleware(
 )
 app.include_router(service_status_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
 app.include_router(agents_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(analytics_router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(conversations_router, prefix="/api", dependencies=[Depends(get_current_user)])

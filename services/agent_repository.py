@@ -9,6 +9,7 @@ from uuid import uuid4
 from mysql.connector import Error, IntegrityError
 
 from utils.database import DatabaseUnavailableError, get_connection_pool
+from services.admin_access import normalize_email
 from services.tool_runtime import ToolFunctionValidationError, validate_tool_definitions
 
 
@@ -157,6 +158,24 @@ def get_agent(agent_id: str) -> dict[str, Any] | None:
         raise DatabaseUnavailableError("Agent lookup failed") from exc
 
 
+def get_agent_for_email(agent_id: str, email: str) -> dict[str, Any] | None:
+    """Return an active agent owned by or shared with one email."""
+    normalized_email = normalize_email(email)
+    try:
+        with closing(get_connection_pool().get_connection()) as connection:
+            with closing(connection.cursor(dictionary=True)) as cursor:
+                cursor.execute(
+                    "SELECT * FROM agents WHERE agent_id = %s AND isActive = 'Y' "
+                    "AND (LOWER(owner_email) = %s OR "
+                    "JSON_CONTAINS(COALESCE(shared_with, JSON_ARRAY()), JSON_QUOTE(%s)))",
+                    (agent_id, normalized_email, normalized_email),
+                )
+                return _decode_agent(cursor.fetchone())
+    except Error as exc:
+        logger.exception("Email-scoped agent lookup failed")
+        raise DatabaseUnavailableError("Agent lookup failed") from exc
+
+
 def list_agents() -> list[dict[str, Any]]:
     """Return all agents ordered by their latest update."""
     try:
@@ -166,6 +185,25 @@ def list_agents() -> list[dict[str, Any]]:
                 return [_decode_agent(row) or {} for row in cursor.fetchall()]
     except Error as exc:
         logger.exception("Agent list lookup failed")
+        raise DatabaseUnavailableError("Agent list lookup failed") from exc
+
+
+def list_agents_for_email(email: str) -> list[dict[str, Any]]:
+    """Return active agents owned by or shared with one email."""
+    normalized_email = normalize_email(email)
+    try:
+        with closing(get_connection_pool().get_connection()) as connection:
+            with closing(connection.cursor(dictionary=True)) as cursor:
+                cursor.execute(
+                    "SELECT * FROM agents WHERE isActive = 'Y' "
+                    "AND (LOWER(owner_email) = %s OR "
+                    "JSON_CONTAINS(COALESCE(shared_with, JSON_ARRAY()), JSON_QUOTE(%s))) "
+                    "ORDER BY last_updated_at DESC",
+                    (normalized_email, normalized_email),
+                )
+                return [_decode_agent(row) or {} for row in cursor.fetchall()]
+    except Error as exc:
+        logger.exception("Email-scoped agent list failed")
         raise DatabaseUnavailableError("Agent list lookup failed") from exc
 
 
@@ -218,6 +256,24 @@ def deactivate_agent(agent_id: str) -> bool:
         raise DatabaseUnavailableError("Agent deactivation failed") from exc
 
 
+def deactivate_owned_agent(agent_id: str, owner_email: str) -> bool:
+    """Soft-delete an active agent only when the email owns it."""
+    try:
+        with closing(get_connection_pool().get_connection()) as connection:
+            with closing(connection.cursor()) as cursor:
+                cursor.execute(
+                    "UPDATE agents SET isActive = 'N' "
+                    "WHERE agent_id = %s AND LOWER(owner_email) = %s AND isActive = 'Y'",
+                    (agent_id, normalize_email(owner_email)),
+                )
+                deactivated = cursor.rowcount > 0
+            connection.commit()
+        return deactivated
+    except Error as exc:
+        logger.exception("Owned agent deactivation failed")
+        raise DatabaseUnavailableError("Agent deactivation failed") from exc
+
+
 def _sync_agent_tool_bindings(cursor: Any, agent_id: str, tooling: list[dict[str, Any]]) -> None:
     """Mirror library snapshots into the normalized binding table."""
     cursor.execute("DELETE FROM agent_tool_bindings WHERE agent_id = %s", (agent_id,))
@@ -235,7 +291,7 @@ def _sync_agent_tool_bindings(cursor: Any, agent_id: str, tooling: list[dict[str
 
 
 def get_session_history(
-    agent_id: str, session_id: str, interaction_limit: int
+    agent_id: str, session_id: str, user_id: str, interaction_limit: int
 ) -> list[dict[str, str]]:
     """Return the latest successful chat turns in chronological order."""
     try:
@@ -243,9 +299,9 @@ def get_session_history(
             with closing(connection.cursor(dictionary=True)) as cursor:
                 cursor.execute(
                     "SELECT input_payload, output_payload FROM agent_chat_interactions "
-                    "WHERE agent_id = %s AND session_id = %s "
+                    "WHERE agent_id = %s AND session_id = %s AND user_id = %s "
                     "ORDER BY chat_sequence_id DESC LIMIT %s",
-                    (agent_id, session_id, interaction_limit),
+                    (agent_id, session_id, normalize_email(user_id), interaction_limit),
                 )
                 rows = cursor.fetchall()
     except Error as exc:

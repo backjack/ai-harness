@@ -110,6 +110,17 @@ export type AuthenticatedUser = {
   name: string;
   email: string;
   picture?: string | null;
+  firstname: string;
+  last_name: string;
+  is_admin: boolean;
+};
+
+export type AdminUser = {
+  emailid: string;
+  firstname: string;
+  last_name: string;
+  is_admin: boolean;
+  is_disabled: boolean;
 };
 
 export type ConversationSummary = {

@@ -1,5 +1,5 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { getAuthConfig, getCurrentUser, logoutCurrentUser, setAuthEnabled as setApiAuthEnabled, setAuthToken, setUnauthorizedHandler } from "./api";
+import { ApiError, getAuthConfig, getCurrentUser, logoutCurrentUser, setAuthEnabled as setApiAuthEnabled, setAuthToken, setUnauthorizedHandler } from "./api";
 import type { AuthenticatedUser } from "./types";
 
 const TOKEN_KEY = "ai-harness.google-id-token";
@@ -68,11 +68,23 @@ function LoginScreen({ clientId, error, onCredential }: { clientId: string; erro
   </section></main>;
 }
 
+function AccessDeniedScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return <main className="auth-page"><section className="auth-card access-denied-card" aria-labelledby="access-denied-title">
+    <div className="auth-brand" aria-hidden="true">AI</div>
+    <p className="eyebrow">ACCESS REQUIRED</p>
+    <h1 id="access-denied-title">Access denied</h1>
+    <div className="auth-error" role="alert">{message}</div>
+    <p>Ask an administrator to re-enable this email, or continue with another Google account.</p>
+    <button type="button" className="primary-button" onClick={onRetry}>Use another Google account</button>
+  </section></main>;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [clientId, setClientId] = useState("");
   const [authEnabled, setAuthEnabled] = useState(true);
   const [error, setError] = useState("");
+  const [accessDenied, setAccessDenied] = useState("");
   const [bootstrapping, setBootstrapping] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
 
@@ -96,7 +108,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [authEnabled, clearSession, signingOut]);
 
   useEffect(() => {
-    setUnauthorizedHandler(clearSession);
+    setUnauthorizedHandler((accessDeniedMessage) => {
+      clearSession();
+      if (accessDeniedMessage) setAccessDenied(accessDeniedMessage);
+    });
     let active = true;
     void (async () => {
       try {
@@ -116,7 +131,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (savedToken) {
           setAuthToken(savedToken);
           try { const currentUser = await getCurrentUser(); if (active) setUser(currentUser); }
-          catch { clearSession(); }
+          catch (reason) {
+            clearSession();
+            if (reason instanceof ApiError && reason.status === 403) setAccessDenied(reason.message);
+          }
         }
       } catch (reason) {
         if (active) setError(reason instanceof Error ? reason.message : "Authentication is unavailable");
@@ -134,11 +152,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(currentUser);
     } catch (reason) {
       clearSession();
-      setError(reason instanceof Error ? reason.message : "Google sign-in failed");
+      if (reason instanceof ApiError && reason.status === 403) setAccessDenied(reason.message);
+      else setError(reason instanceof Error ? reason.message : "Google sign-in failed");
     }
   }, [clearSession]);
 
+  const retryWithAnotherAccount = useCallback(() => {
+    clearSession();
+    window.google?.accounts.id.disableAutoSelect();
+    setAccessDenied("");
+    setError("");
+  }, [clearSession]);
+
   if (bootstrapping) return <main className="auth-page"><div className="auth-loading"><i className="loading-circle" /> Restoring your session…</div></main>;
+  if (accessDenied) return <AccessDeniedScreen message={accessDenied} onRetry={retryWithAnotherAccount} />;
   if (!user) return <LoginScreen clientId={clientId} error={error} onCredential={acceptCredential} />;
   return <AuthContext.Provider value={{ user, authEnabled, signingOut, signOut }}>{children}</AuthContext.Provider>;
 }

@@ -7,7 +7,14 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from utils.database import DatabaseUnavailableError
-from services.agent_repository import create_agent, deactivate_agent, get_agent, list_agents, update_agent
+from services.agent_repository import (
+    create_agent,
+    deactivate_owned_agent as deactivate_agent,
+    get_agent_for_email as get_agent,
+    list_agents_for_email as list_agents,
+    update_agent,
+)
+from services.admin_access import normalize_email
 from services.tool_runtime import ToolFunctionValidationError, validate_tool_definitions
 from services.auth import CurrentUser
 
@@ -90,6 +97,11 @@ class AgentBase(BaseModel):
     )
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
 
+    @field_validator("shared_with")
+    @classmethod
+    def normalize_shared_emails(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(normalize_email(value) for value in values if value.strip()))
+
 
 class AgentCreate(AgentBase):
     faq: dict[str, str] | None = None
@@ -133,6 +145,13 @@ class AgentUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    @field_validator("shared_with")
+    @classmethod
+    def normalize_optional_shared_emails(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        return list(dict.fromkeys(normalize_email(value) for value in values if value.strip()))
+
 
 class AgentResponse(AgentBase):
     agent_id: str
@@ -165,19 +184,19 @@ async def create_agent_endpoint(request: AgentCreate, user: CurrentUser) -> dict
 
 
 @router.get("", response_model=list[AgentResponse])
-async def list_agents_endpoint() -> list[dict[str, Any]]:
+async def list_agents_endpoint(user: CurrentUser) -> list[dict[str, Any]]:
     """List agent definitions."""
     try:
-        return list_agents()
+        return list_agents(user.email)
     except DatabaseUnavailableError as exc:
         raise _database_error(exc) from exc
 
 
 @router.get("/{agent_id}", response_model=AgentDetailResponse)
-async def get_agent_endpoint(agent_id: str) -> dict[str, Any]:
+async def get_agent_endpoint(agent_id: str, user: CurrentUser) -> dict[str, Any]:
     """Get one agent definition."""
     try:
-        agent = get_agent(agent_id)
+        agent = get_agent(agent_id, user.email)
     except DatabaseUnavailableError as exc:
         raise _database_error(exc) from exc
     if agent is None:
@@ -186,9 +205,14 @@ async def get_agent_endpoint(agent_id: str) -> dict[str, Any]:
 
 
 @router.patch("/{agent_id}", response_model=AgentDetailResponse)
-async def update_agent_endpoint(agent_id: str, request: AgentUpdate) -> dict[str, Any]:
+async def update_agent_endpoint(agent_id: str, request: AgentUpdate, user: CurrentUser) -> dict[str, Any]:
     """Partially update an agent definition."""
     try:
+        accessible = get_agent(agent_id, user.email)
+        if accessible is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        if normalize_email(accessible["owner_email"]) != normalize_email(user.email):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the agent owner can modify this agent")
         agent = update_agent(agent_id, request.model_dump(exclude_unset=True))
     except DatabaseUnavailableError as exc:
         raise _database_error(exc) from exc
@@ -198,10 +222,15 @@ async def update_agent_endpoint(agent_id: str, request: AgentUpdate) -> dict[str
 
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent_endpoint(agent_id: str) -> None:
+async def delete_agent_endpoint(agent_id: str, user: CurrentUser) -> None:
     """Soft-delete an agent definition."""
     try:
-        deleted = deactivate_agent(agent_id)
+        accessible = get_agent(agent_id, user.email)
+        if accessible is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+        if normalize_email(accessible["owner_email"]) != normalize_email(user.email):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the agent owner can modify this agent")
+        deleted = deactivate_agent(agent_id, user.email)
     except DatabaseUnavailableError as exc:
         raise _database_error(exc) from exc
     if not deleted:

@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 
 from main import app
 from controllers.service_status import _classify_message
+from controllers.admin import require_admin
+from fastapi import HTTPException
 from services.auth import AuthenticatedUser, get_current_user
 from services.analytics import get_analytics_report
 from services.agent_repository import _decode_agent, _serialize_agent_values, update_agent as update_stored_agent
@@ -44,6 +46,9 @@ def _test_user() -> AuthenticatedUser:
         sub="google-user-1",
         email="neeraj@example.com",
         name="Neeraj Sharma",
+        firstname="Neeraj",
+        last_name="Sharma",
+        is_admin=True,
     )
 
 
@@ -57,7 +62,7 @@ def agent_record() -> dict[str, object]:
         "description": "Helpful assistant.",
         "initiative_id": "initiative-123",
         "faq": {"What can you do?": "I can help."},
-        "owner_email": "owner@example.com",
+        "owner_email": "neeraj@example.com",
         "shared_with": [],
         "model_id": "gpt-5.4-mini",
         "tooling": [],
@@ -65,7 +70,7 @@ def agent_record() -> dict[str, object]:
         "user_prompts": [],
         "model_type": "openai",
         "guardrails": {},
-        "created_by": "owner@example.com",
+        "created_by": "neeraj@example.com",
         "created_at": datetime.now(timezone.utc),
         "last_updated_at": datetime.now(timezone.utc),
     }
@@ -164,12 +169,79 @@ def test_openapi_schema_documents_the_api() -> None:
     assert schema["info"]["title"] == "AI Harness API"
     assert schema["info"]["version"] == "0.1.0"
     assert {"/api/", "/api/health", "/api/chat", "/api/analytics", "/api/conversations"}.issubset(schema["paths"])
-    assert {tag["name"] for tag in schema["tags"]} == {"service", "health", "chat", "analytics", "conversations", "authentication"}
+    assert {tag["name"] for tag in schema["tags"]} == {"service", "health", "chat", "analytics", "conversations", "authentication", "administration"}
     assert "ChatRequest" in schema["components"]["schemas"]
     assert "ChatResponse" in schema["components"]["schemas"]
     assert {"200", "422", "502", "503"}.issubset(
         schema["paths"]["/api/chat"]["post"]["responses"]
     )
+
+
+def test_non_admin_identity_is_rejected_by_admin_guard() -> None:
+    user = _test_user().model_copy(update={"is_admin": False})
+
+    with pytest.raises(HTTPException) as exc_info:
+        require_admin(user)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Administrator access required"
+
+
+def test_admin_user_endpoints_manage_access_registry(monkeypatch) -> None:
+    stored = {
+        "emailid": "new.user@example.com",
+        "firstname": "New",
+        "last_name": "User",
+        "is_admin": False,
+        "is_disabled": False,
+    }
+    monkeypatch.setattr("controllers.admin.list_admin_users", lambda: [stored])
+    monkeypatch.setattr("controllers.admin.create_admin_user", lambda values: values)
+    monkeypatch.setattr(
+        "controllers.admin.update_admin_user",
+        lambda email, values: {**stored, **values},
+    )
+    assert client.get("/api/admin/users").json() == [stored]
+    created = client.post("/api/admin/users", json=stored)
+    assert created.status_code == 201
+    assert created.json() == stored
+    updated = client.patch(
+        "/api/admin/users/new.user@example.com",
+        json={"firstname": "Updated", "is_admin": True, "is_disabled": True},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["firstname"] == "Updated"
+    assert updated.json()["is_admin"] is True
+    assert updated.json()["is_disabled"] is True
+
+
+def test_admin_endpoint_protects_final_administrator(monkeypatch) -> None:
+    from services.admin_access import LastAdministratorError
+
+    def reject(*args: object, **kwargs: object) -> None:
+        raise LastAdministratorError("neeraj@example.com")
+
+    monkeypatch.setattr("controllers.admin.update_admin_user", reject)
+
+    response = client.patch(
+        "/api/admin/users/neeraj@example.com",
+        json={"is_admin": False},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "At least one administrator is required"}
+
+
+def test_admin_user_migration_has_required_columns_and_seed() -> None:
+    migration = (Path(__file__).parents[1] / "resources" / "scripts" / "create_admin_users.sql").read_text()
+
+    assert "CREATE TABLE IF NOT EXISTS admin_users" in migration
+    assert {"emailid", "firstname", "last_name", "is_admin", "is_disabled"}.issubset(migration.split())
+    assert "neeraj.s1988@gmail.com" in migration
+    assert "ON DUPLICATE KEY UPDATE" in migration
+
+    upgrade = (Path(__file__).parents[1] / "resources" / "scripts" / "migrate_admin_users_add_is_disabled.sql").read_text()
+    assert "ADD COLUMN is_disabled BOOLEAN NOT NULL DEFAULT FALSE" in upgrade
 
 
 def test_conversations_returns_five_email_scoped_summaries(monkeypatch) -> None:
@@ -471,7 +543,7 @@ def test_chat_returns_model_response(monkeypatch) -> None:
             assert "highcharts" in system_prompts[1]
             return ModelResponse("Hi there!", input_tokens=3, output_tokens=2)
 
-    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id: agent_record())
+    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id, email: agent_record())
     monkeypatch.setattr("services.conversation_agent.get_session_history", lambda *args: [])
     monkeypatch.setattr("services.conversation_agent.get_model_execution", lambda *args: FakeModelExecution())
     def audit(**kwargs: object) -> int:
@@ -606,7 +678,7 @@ def test_conversation_cache_refreshes_current_session_after_guardrail_update(mon
     cache = ConversationAgentCache()
     created: list[SimpleNamespace] = []
 
-    def create_runtime(agent: dict[str, object], session_id: str) -> SimpleNamespace:
+    def create_runtime(agent: dict[str, object], session_id: str, user_id: str) -> SimpleNamespace:
         runtime = SimpleNamespace(
             definition_signature=cache._definition_signature(agent),
             last_accessed=0.0,
@@ -620,14 +692,38 @@ def test_conversation_cache_refreshes_current_session_after_guardrail_update(mon
     monkeypatch.setattr(cache, "_create_runtime_agent", create_runtime)
     agent = agent_record()
 
-    first = asyncio.run(cache.get_or_create(agent, "current-session"))
+    first = asyncio.run(cache.get_or_create(agent, "current-session", "neeraj@example.com"))
     agent["guardrails"] = {"blocked_topics": ["restricted-topic"]}
-    refreshed = asyncio.run(cache.get_or_create(agent, "current-session"))
+    refreshed = asyncio.run(cache.get_or_create(agent, "current-session", "neeraj@example.com"))
 
     assert refreshed is not first
     assert refreshed.session_id == "current-session"
     assert refreshed.guardrails == {"blocked_topics": ["restricted-topic"]}
     assert len(created) == 2
+
+
+def test_conversation_cache_is_isolated_by_user_email(monkeypatch) -> None:
+    from services.conversation_agent import ConversationAgentCache
+
+    cache = ConversationAgentCache()
+
+    def create_runtime(agent: dict[str, object], session_id: str, user_id: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            definition_signature=cache._definition_signature(agent),
+            last_accessed=0.0,
+            lock=asyncio.Lock(),
+            user_id=user_id,
+        )
+
+    monkeypatch.setattr(cache, "_create_runtime_agent", create_runtime)
+    agent = agent_record()
+
+    first = asyncio.run(cache.get_or_create(agent, "same-session", "first@example.com"))
+    second = asyncio.run(cache.get_or_create(agent, "same-session", "second@example.com"))
+
+    assert first is not second
+    assert first.user_id == "first@example.com"
+    assert second.user_id == "second@example.com"
 
 
 def test_conversation_guardrail_classifier_failure_blocks_safely() -> None:
@@ -797,7 +893,7 @@ def test_chat_stream_emits_model_progress_then_final_response(monkeypatch) -> No
     async def get_runtime(*args: object) -> FakeRuntimeAgent:
         return FakeRuntimeAgent()
 
-    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id: agent_record())
+    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id, email: agent_record())
     monkeypatch.setattr("controllers.service_status.conversation_agent_cache.get_or_create", get_runtime)
     monkeypatch.setattr("controllers.service_status.record_successful_chat", lambda **kwargs: 7)
 
@@ -877,7 +973,7 @@ def test_chat_reports_missing_model_configuration(monkeypatch) -> None:
     def missing_configuration(provider: str, model_id: str):
         raise ModelNotConfiguredError("missing key")
 
-    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id: agent_record())
+    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id, email: agent_record())
     monkeypatch.setattr("services.conversation_agent.get_session_history", lambda *args: [])
     monkeypatch.setattr("services.conversation_agent.get_model_execution", missing_configuration)
 
@@ -901,7 +997,7 @@ def test_chat_reports_provider_failures(monkeypatch) -> None:
         ) -> ModelResponse:
             raise ModelExecutionError("provider unavailable")
 
-    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id: agent_record())
+    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id, email: agent_record())
     monkeypatch.setattr("services.conversation_agent.get_session_history", lambda *args: [])
     monkeypatch.setattr("services.conversation_agent.get_model_execution", lambda *args: FailingModelExecution())
 
@@ -919,7 +1015,7 @@ def test_chat_reports_provider_failures(monkeypatch) -> None:
 
 
 def test_chat_returns_not_found_for_unknown_agent(monkeypatch) -> None:
-    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id: None)
+    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id, email: None)
 
     response = client.post(
         "/api/chat",
@@ -946,7 +1042,7 @@ def test_chat_returns_database_error_when_audit_fails(monkeypatch) -> None:
     def audit_failure(**kwargs) -> int:
         raise DatabaseUnavailableError("database unavailable")
 
-    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id: agent_record())
+    monkeypatch.setattr("controllers.service_status.get_agent", lambda agent_id, email: agent_record())
     monkeypatch.setattr("services.conversation_agent.get_session_history", lambda *args: [])
     monkeypatch.setattr("services.conversation_agent.get_model_execution", lambda *args: FakeModelExecution())
     monkeypatch.setattr("controllers.service_status.record_successful_chat", audit_failure)
@@ -1113,8 +1209,8 @@ def test_create_agent_accepts_null_faq(monkeypatch) -> None:
 
 def test_agent_detail_returns_faq_but_list_omits_it(monkeypatch) -> None:
     stored = agent_record()
-    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id: stored)
-    monkeypatch.setattr("controllers.agents.list_agents", lambda: [stored])
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id, email: stored)
+    monkeypatch.setattr("controllers.agents.list_agents", lambda email: [stored])
 
     detail_response = client.get(f"/api/agents/{stored['agent_id']}")
     list_response = client.get("/api/agents")
@@ -1123,6 +1219,34 @@ def test_agent_detail_returns_faq_but_list_omits_it(monkeypatch) -> None:
     assert detail_response.json()["faq"] == stored["faq"]
     assert list_response.status_code == 200
     assert "faq" not in list_response.json()[0]
+
+
+def test_agent_list_is_scoped_to_authenticated_email(monkeypatch) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(
+        "controllers.agents.list_agents",
+        lambda email: captured.append(email) or [agent_record()],
+    )
+
+    response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    assert captured == ["neeraj@example.com"]
+
+
+def test_shared_agent_is_read_only_for_non_owner(monkeypatch) -> None:
+    shared = agent_record()
+    shared["owner_email"] = "owner@example.com"
+    shared["shared_with"] = ["neeraj@example.com"]
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id, email: shared)
+
+    response = client.patch(
+        f"/api/agents/{shared['agent_id']}",
+        json={"agent_name": "Unauthorized update"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Only the agent owner can modify this agent"}
 
 
 @pytest.mark.parametrize(
@@ -1172,7 +1296,7 @@ def test_create_agent_accepts_inline_python_tool(monkeypatch) -> None:
 def test_list_agents_normalizes_legacy_string_tooling(monkeypatch, caplog) -> None:
     legacy_agent = agent_record()
     legacy_agent["tooling"] = ["legacy-tool-id"]
-    monkeypatch.setattr("controllers.agents.list_agents", lambda: [legacy_agent])
+    monkeypatch.setattr("controllers.agents.list_agents", lambda email: [legacy_agent])
 
     with caplog.at_level(logging.WARNING, logger="ai_harness.agent_repository"):
         decoded = _decode_agent(legacy_agent)
@@ -1233,8 +1357,8 @@ def test_agent_endpoints_return_empty_string_for_null_description(monkeypatch) -
     stored["description"] = None
     decoded = _decode_agent(stored)
     assert decoded is not None
-    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id: decoded)
-    monkeypatch.setattr("controllers.agents.list_agents", lambda: [decoded])
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id, email: decoded)
+    monkeypatch.setattr("controllers.agents.list_agents", lambda email: [decoded])
 
     detail_response = client.get(f"/api/agents/{decoded['agent_id']}")
     list_response = client.get("/api/agents")
@@ -1253,6 +1377,7 @@ def test_serialize_agent_values_preserves_null_faq_as_sql_null() -> None:
 
 
 def test_update_agent_returns_not_found(monkeypatch) -> None:
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id, email: None)
     monkeypatch.setattr("controllers.agents.update_agent", lambda agent_id, values: None)
 
     response = client.patch("/api/agents/missing", json={"agent_name": "Updated"})
@@ -1353,6 +1478,7 @@ def test_update_agent_persists_initiative_id(monkeypatch) -> None:
         return stored
 
     monkeypatch.setattr("controllers.agents.update_agent", update)
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id, email: agent_record())
 
     response = client.patch(
         "/api/agents/11111111-1111-1111-1111-111111111111",
@@ -1374,6 +1500,7 @@ def test_update_agent_persists_faq(monkeypatch) -> None:
         return stored
 
     monkeypatch.setattr("controllers.agents.update_agent", update)
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id, email: agent_record())
 
     faq = {"How does this work?": "It is stored as agent metadata."}
     response = client.patch(
@@ -1396,6 +1523,7 @@ def test_update_agent_clears_faq_with_null(monkeypatch) -> None:
         return stored
 
     monkeypatch.setattr("controllers.agents.update_agent", update)
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id, email: agent_record())
 
     response = client.patch(
         "/api/agents/11111111-1111-1111-1111-111111111111",
@@ -1408,7 +1536,8 @@ def test_update_agent_clears_faq_with_null(monkeypatch) -> None:
 
 
 def test_delete_agent_soft_deactivates(monkeypatch) -> None:
-    monkeypatch.setattr("controllers.agents.deactivate_agent", lambda agent_id: agent_id == "agent-1")
+    monkeypatch.setattr("controllers.agents.get_agent", lambda agent_id, email: agent_record())
+    monkeypatch.setattr("controllers.agents.deactivate_agent", lambda agent_id, email: agent_id == "agent-1")
 
     assert client.delete("/api/agents/agent-1").status_code == 204
     missing = client.delete("/api/agents/missing")
@@ -1856,7 +1985,7 @@ def test_conversation_runtime_prefers_refreshed_mcp_schema_and_binding_settings(
         "allowed_scope": {"mailbox": "current"}, "input_schema": {},
     }]
 
-    runtime = ConversationAgentCache()._create_runtime_agent(agent, "session-1")
+    runtime = ConversationAgentCache()._create_runtime_agent(agent, "session-1", "neeraj@example.com")
     record = captured["records"][0]
 
     assert record["input_schema"]["required"] == ["query"]
@@ -2164,6 +2293,21 @@ def test_stock_price_seed_has_no_yfinance_dependency() -> None:
 
     assert "yfinance" not in seed
     assert "query1.finance.yahoo.com/v8/finance/chart" in seed
+
+
+def test_static_user_agent_sharing_scripts_are_idempotent() -> None:
+    scripts = Path(__file__).parents[1] / "resources" / "scripts"
+    migration = (scripts / "migrate_agents_share_static_user.sql").read_text()
+    seed = (scripts / "seed_stock_price_agent.sql").read_text()
+
+    for sql in (migration, seed):
+        assert "neeraj.s1988@gmail.com" in sql
+        assert "JSON_CONTAINS" in sql
+        assert "COALESCE(shared_with, JSON_ARRAY())" in sql
+        assert "JSON_ARRAY_APPEND" in sql
+
+    assert "WHERE isActive = 'Y'" in migration
+    assert "shared_with = CASE" in seed
 
 
 def test_stored_python_tool_requires_declared_callable() -> None:

@@ -108,8 +108,18 @@ For an existing database, apply the agent and tool-library scripts in this
 order: `migrate_agents_add_description_workflow.sql` (retained as a legacy
 filename; it now adds only `description`),
 `migrate_agents_add_initiative_id.sql`, `migrate_agents_add_faq.sql`, then
-`create_tool_library.sql`. The description and initiative migrations
-are safe to run again; the tool-library schema uses `CREATE TABLE IF NOT EXISTS`.
+`create_tool_library.sql`. Before deploying email access enforcement, also run
+`create_admin_users.sql`; it creates the access registry and idempotently seeds
+`neeraj.s1988@gmail.com` as the first administrator. Installations that already
+have `admin_users` must then run `migrate_admin_users_add_is_disabled.sql` to
+add the enabled/disabled access flag. The description and
+initiative migrations are safe to run again; the create scripts use
+`CREATE TABLE IF NOT EXISTS`.
+
+For an existing installation that uses the seeded static identity, run
+`migrate_agents_share_static_user.sql` after the agent schema migrations. It
+idempotently adds `neeraj.s1988@gmail.com` to every active agent's
+`shared_with` list without changing ownership or removing existing shares.
 
 ## Logging
 
@@ -160,11 +170,16 @@ JavaScript origins. Set its client ID as `GOOGLE_CLIENT_ID` in the backend
 environment. The browser obtains a Google ID token, keeps it for the current
 tab, and sends it as a bearer token to protected `/api` endpoints. Health,
 Swagger/OpenAPI, and authentication bootstrap endpoints remain public.
+Valid authenticated emails are registered in `admin_users` automatically as
+enabled non-administrators. Administrators manage that registry from
+`/admin/users` and can disable or re-enable application access. A disabled
+account receives an access-denied message that includes its email address.
 
 For a trusted static-user deployment, set `AUTH_ENABLED=false` together with
 `AUTH_STATIC_USER_NAME` and `AUTH_STATIC_USER_EMAIL`. This bypasses JWT
 validation for every API request, so keep `AUTH_ENABLED=true` anywhere Google
-authentication must be enforced.
+authentication must be enforced. Static identities are registered in
+`admin_users` in the same way as Google identities.
 
 ## Render deployment
 

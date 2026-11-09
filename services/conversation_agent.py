@@ -44,6 +44,7 @@ class ConversationAgent:
     guardrails: dict[str, Any]
     tools: list[Any]
     definition_signature: str
+    user_id: str = ""
     last_accessed: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -199,14 +200,15 @@ class ConversationAgentCache:
     """A bounded process-local cache backed by durable chat audit records."""
 
     def __init__(self) -> None:
-        self._agents: OrderedDict[tuple[str, str], ConversationAgent] = OrderedDict()
+        self._agents: OrderedDict[tuple[str, str, str], ConversationAgent] = OrderedDict()
         self._lock = asyncio.Lock()
 
     async def get_or_create(
-        self, agent: dict[str, Any], session_id: str
+        self, agent: dict[str, Any], session_id: str, user_id: str = "anonymous"
     ) -> ConversationAgent:
         """Return a live session agent, rebuilding its context from MySQL if necessary."""
-        cache_key = (agent["agent_id"], session_id)
+        normalized_user_id = user_id.strip().lower()
+        cache_key = (normalized_user_id, agent["agent_id"], session_id)
         async with self._lock:
             self._evict_expired()
             cached = self._agents.get(cache_key)
@@ -215,17 +217,17 @@ class ConversationAgentCache:
                 self._agents.move_to_end(cache_key)
                 return cached
 
-            runtime_agent = self._create_runtime_agent(agent, session_id)
+            runtime_agent = self._create_runtime_agent(agent, session_id, normalized_user_id)
             self._agents[cache_key] = runtime_agent
             self._evict_overflow()
             return runtime_agent
 
     def _create_runtime_agent(
-        self, agent: dict[str, Any], session_id: str
+        self, agent: dict[str, Any], session_id: str, user_id: str = "anonymous"
     ) -> ConversationAgent:
         config = get_config()
         interaction_limit = (config.chat_history_message_limit + 1) // 2
-        turns = get_session_history(agent["agent_id"], session_id, interaction_limit)
+        turns = get_session_history(agent["agent_id"], session_id, user_id, interaction_limit)
         history: list[BaseMessage] = []
         for turn in turns:
             history.extend(
@@ -272,6 +274,7 @@ class ConversationAgentCache:
         return ConversationAgent(
             agent_id=agent["agent_id"],
             session_id=session_id,
+            user_id=user_id,
             system_prompts=system_prompts,
             executor=get_model_execution(agent["model_type"], agent["model_id"]),
             history=history[-config.chat_history_message_limit :],

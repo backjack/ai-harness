@@ -648,11 +648,41 @@ tbody tr { height:52px; }.table-primary { font-weight:var(--font-semibold) !impo
   .analytics-summary strong,.initiative-cost-kpis strong,.kpi-value { font-size:1.6rem !important; }
 }
 
+/* Application access administration. */
+.access-denied-card { text-align:center; }
+.access-denied-card .auth-error { margin:20px 0 12px; }
+.access-denied-card .primary-button { justify-content:center; width:100%; margin-top:12px; }
+.shared-agent-badge { flex:0 0 auto; padding:4px 8px; border-radius:999px; background:#edf3fa; color:var(--blue); font-size:12px; font-weight:700; }
+.admin-users-page { min-width:0; }
+.admin-notice { margin-bottom:16px; padding:11px 14px; border-left:3px solid #10a37f; background:#e8f7f1; color:#08785d; }
+.admin-table-wrap { overflow:hidden; border:1px solid var(--line); border-radius:16px; background:var(--paper); box-shadow:0 3px 12px rgba(13,43,73,.04); }
+.admin-users-table { width:100%; border-collapse:collapse; }
+.admin-users-table th,.admin-users-table td { padding:15px 18px; border-bottom:1px solid var(--line); text-align:left; vertical-align:middle; }
+.admin-users-table th { background:var(--subtle); color:var(--navy); font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+.admin-users-table tbody tr:last-child td { border-bottom:0; }
+.admin-users-table td:first-child { color:var(--navy); font-weight:600; overflow-wrap:anywhere; }
+.admin-row-actions { display:flex; justify-content:flex-end; gap:7px; }
+.admin-row-actions button { display:grid; place-items:center; width:36px; height:36px; padding:0; border:1px solid var(--line); border-radius:9px; background:var(--paper); color:var(--blue); }
+.admin-row-actions button:hover,.admin-row-actions button:focus-visible { outline:0; border-color:#b7c5d4; background:var(--subtle); }
+.admin-row-actions button.danger { color:var(--terracotta); }
+.admin-row-actions button.enable { color:#08785d; }
+.admin-row-actions svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-linecap:round; stroke-linejoin:round; stroke-width:1.8; }
+
+@media (max-width:760px) {
+  .admin-table-wrap { width:100%; overflow:visible; border:0; background:transparent; box-shadow:none; }
+  .admin-users-table,.admin-users-table tbody { display:grid; width:100%; gap:12px; }
+  .admin-users-table thead { display:none; }
+  .admin-users-table tr { display:grid; height:auto !important; min-height:0; gap:9px; padding:14px; border:1px solid var(--line); border-radius:14px; background:var(--paper); box-shadow:0 2px 8px rgba(13,43,73,.04); }
+  .admin-users-table td { display:grid; min-width:0; grid-template-columns:minmax(92px,auto) minmax(0,1fr); align-items:start; gap:10px; padding:0; border:0; overflow-wrap:anywhere; }
+  .admin-users-table td::before { content:attr(data-label); color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; }
+  .admin-row-actions { justify-content:flex-start; }
+}
+
 /* Center the complete empty-chat experience and combine agent selection. */
 .welcome { display:flex; padding:24px 40px; }
 .empty-conversation { display:grid; gap:28px; width:min(1020px,100%); margin:auto; }
 .empty-conversation .welcome-content { width:min(700px,100%); margin:0 auto; }
-.empty-conversation .composer-wrap { width:100%; padding:0; }
+.empty-conversation .composer-wrap { width:min(700px,100%); margin-inline:auto; padding:0; }
 .composer { grid-template-columns:auto minmax(0,1fr) auto; align-items:center; }
 .composer .agent-picker-wrap,.composer .send-button { margin-top:0; }
 .agent-picker-trigger { display:inline-flex; align-items:center; justify-content:center; gap:8px; max-width:230px; min-height:40px; padding:7px 11px; overflow:hidden; border:1px solid var(--line); border-radius:999px; background:var(--subtle); color:var(--navy); font:inherit; font-weight:700; white-space:nowrap; }

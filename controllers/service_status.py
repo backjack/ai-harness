@@ -14,7 +14,7 @@ from utils.database import (
     DatabaseUnavailableError,
     check_database_readiness,
 )
-from services.agent_repository import get_agent, record_successful_chat
+from services.agent_repository import get_agent_for_email as get_agent, record_successful_chat
 from services.chat_message import classify_message_payload, json_safe
 from services.conversation_agent import conversation_agent_cache
 from services.chat_events import ChatEventSink
@@ -115,7 +115,7 @@ async def _run_chat(
     chat_event_id = event_sink.chat_event_id if event_sink else str(uuid4())
     _emit(event_sink, "agent.lookup.start", agent_id=request.agent_id)
     try:
-        agent = get_agent(request.agent_id)
+        agent = get_agent(request.agent_id, user.email)
     except DatabaseUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -129,7 +129,7 @@ async def _run_chat(
     session_id = request.session_id or str(uuid4())
     _emit(event_sink, "session.initialized", session_id=session_id)
     try:
-        runtime_agent = await conversation_agent_cache.get_or_create(agent, session_id)
+        runtime_agent = await conversation_agent_cache.get_or_create(agent, session_id, user.email)
     except DatabaseUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

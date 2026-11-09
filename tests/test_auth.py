@@ -13,6 +13,20 @@ from controllers.tool_library import router as tool_library_router
 from services.auth import AuthenticatedUser, get_current_user
 
 
+@pytest.fixture(autouse=True)
+def allow_test_user(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "services.auth.get_or_create_admin_user",
+        lambda email, firstname, last_name: {
+            "emailid": email,
+            "firstname": "Neeraj",
+            "last_name": "Sharma",
+            "is_admin": True,
+            "is_disabled": False,
+        },
+    )
+
+
 def auth_app() -> FastAPI:
     app = FastAPI()
     app.include_router(auth_router, prefix="/api")
@@ -138,6 +152,9 @@ def test_valid_google_identity_is_returned_and_logged(monkeypatch, caplog) -> No
         "email": "neeraj@example.com",
         "name": "Neeraj Sharma",
         "picture": "https://example.com/photo.jpg",
+        "firstname": "Neeraj",
+        "last_name": "Sharma",
+        "is_admin": True,
     }
     assert "email=neeraj@example.com" in caplog.text
     assert "name=Neeraj Sharma" in caplog.text
@@ -166,6 +183,47 @@ def test_google_logout_is_authenticated_and_audited(monkeypatch, caplog) -> None
     assert "User logout email=neeraj@example.com" in caplog.text
     assert "name=Neeraj Sharma" in caplog.text
     assert "valid-token" not in caplog.text
+
+
+def test_new_google_identity_is_registered_with_claim_names(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "client.apps.googleusercontent.com")
+    monkeypatch.setattr(
+        "services.auth.id_token.verify_oauth2_token",
+        lambda *args, **kwargs: {
+            "sub": "google-user-2",
+            "email": "Blocked.User@Example.com",
+            "email_verified": True,
+            "name": "New User",
+            "given_name": "New",
+            "family_name": "User",
+        },
+    )
+    captured: dict[str, str] = {}
+
+    def register(email: str, firstname: str, last_name: str) -> dict[str, object]:
+        captured.update(email=email, firstname=firstname, last_name=last_name)
+        return {
+            "emailid": email,
+            "firstname": firstname,
+            "last_name": last_name,
+            "is_admin": False,
+            "is_disabled": False,
+        }
+
+    monkeypatch.setattr("services.auth.get_or_create_admin_user", register)
+
+    response = TestClient(auth_app()).get(
+        "/api/auth/me", headers={"Authorization": "Bearer valid-token"}
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "email": "blocked.user@example.com",
+        "firstname": "New",
+        "last_name": "User",
+    }
+    assert response.json()["is_admin"] is False
 
 
 def test_invalid_google_token_is_rejected(monkeypatch) -> None:
@@ -227,6 +285,9 @@ def test_static_auth_bypasses_google_and_returns_configured_user(monkeypatch, ca
         "email": "neeraj.s1988@gmail.com",
         "name": "Neeraj Sharma",
         "picture": None,
+        "firstname": "Neeraj",
+        "last_name": "Sharma",
+        "is_admin": True,
     }
     assert protected.json() == {"email": "neeraj.s1988@gmail.com"}
     logout = client.post("/api/auth/logout")
@@ -246,3 +307,26 @@ def test_static_auth_requires_name_and_email(monkeypatch) -> None:
 
     assert client.get("/api/auth/config").status_code == 503
     assert client.get("/api/protected").status_code == 503
+
+
+def test_disabled_static_identity_receives_exact_access_message(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    monkeypatch.setenv("AUTH_STATIC_USER_NAME", "Blocked User")
+    monkeypatch.setenv("AUTH_STATIC_USER_EMAIL", "blocked@example.com")
+    monkeypatch.setattr(
+        "services.auth.get_or_create_admin_user",
+        lambda email, firstname, last_name: {
+            "emailid": email,
+            "firstname": firstname,
+            "last_name": last_name,
+            "is_admin": False,
+            "is_disabled": True,
+        },
+    )
+
+    response = TestClient(auth_app()).get("/api/auth/me")
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Access is disabled for email blocked@example.com"
+    }

@@ -3,7 +3,7 @@ INSERT INTO agents (
     user_prompts, model_type, guardrails, created_by
 ) VALUES (
     '00000000-0000-0000-0000-000000000002',
-    'Stock Price Assistant', 'Provides market-price and portfolio analysis.', JSON_OBJECT(), 'owner@example.com', JSON_ARRAY(), 'gpt-5.4-mini',
+    'Stock Price Assistant', 'Provides market-price and portfolio analysis.', JSON_OBJECT(), 'owner@example.com', JSON_ARRAY('neeraj.s1988@gmail.com'), 'gpt-5.4-mini',
     JSON_ARRAY(JSON_OBJECT(
         'name', 'getMarketPrice',
         'description', 'This tool is used for providing live market-price details for a stock ticker.',
@@ -15,4 +15,18 @@ INSERT INTO agents (
         'allowed_topics', JSON_ARRAY('stocks', 'stock prices', 'equities', 'investment portfolios', 'portfolio analysis'),
         'out_of_scope_response', 'I can only help with stock and investment portfolio-related questions.'
     ), 'owner@example.com'
-) ON DUPLICATE KEY UPDATE tooling = VALUES(tooling), system_prompts = VALUES(system_prompts), guardrails = VALUES(guardrails);
+) ON DUPLICATE KEY UPDATE
+    tooling = VALUES(tooling),
+    system_prompts = VALUES(system_prompts),
+    guardrails = VALUES(guardrails),
+    shared_with = CASE
+        WHEN JSON_CONTAINS(
+            COALESCE(shared_with, JSON_ARRAY()),
+            JSON_QUOTE('neeraj.s1988@gmail.com')
+        ) THEN COALESCE(shared_with, JSON_ARRAY())
+        ELSE JSON_ARRAY_APPEND(
+            COALESCE(shared_with, JSON_ARRAY()),
+            '$',
+            'neeraj.s1988@gmail.com'
+        )
+    END;

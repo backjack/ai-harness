@@ -1,9 +1,16 @@
-import type { Agent, AgentCreate, AgentUpdate, AnalyticsReport, AuthenticatedUser, ChatEvent, ConversationDetail, ConversationSummary, InlineToolTestResult, ToolDefinition, ToolSource, ToolTestResult } from "./types";
+import type { AdminUser, Agent, AgentCreate, AgentUpdate, AnalyticsReport, AuthenticatedUser, ChatEvent, ConversationDetail, ConversationSummary, InlineToolTestResult, ToolDefinition, ToolSource, ToolTestResult } from "./types";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 let accessToken: string | null = null;
 let authenticationEnabled = true;
-let unauthorizedHandler: (() => void) | null = null;
+let unauthorizedHandler: ((accessDeniedMessage?: string) => void) | null = null;
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 export function setAuthToken(token: string | null): void {
   accessToken = token;
@@ -13,7 +20,7 @@ export function setAuthEnabled(enabled: boolean): void {
   authenticationEnabled = enabled;
 }
 
-export function setUnauthorizedHandler(handler: (() => void) | null): void {
+export function setUnauthorizedHandler(handler: ((accessDeniedMessage?: string) => void) | null): void {
   unauthorizedHandler = handler;
 }
 
@@ -26,6 +33,10 @@ async function apiFetch(path: string, init: RequestInit = {}, authenticated = tr
   if (authenticated && accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   const response = await fetch(`${baseUrl}${path}`, { ...init, headers });
   if (authenticated && response.status === 401) unauthorizedHandler?.();
+  if (authenticated && response.status === 403) {
+    const error = await response.clone().json().catch(() => null) as { detail?: string } | null;
+    if (error?.detail?.startsWith("Access is disabled for email ")) unauthorizedHandler?.(error.detail);
+  }
   return response;
 }
 
@@ -33,7 +44,7 @@ async function publicJson<T>(path: string): Promise<T> {
   const response = await apiFetch(path, {}, false);
   if (!response.ok) {
     const error = await response.json().catch(() => null) as { detail?: string } | null;
-    throw new Error(error?.detail ?? `Request failed (${response.status})`);
+    throw new ApiError(error?.detail ?? `Request failed (${response.status})`, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -42,7 +53,7 @@ async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await apiFetch(path, init);
   if (!response.ok) {
     const error = await response.json().catch(() => null) as { detail?: string } | null;
-    throw new Error(error?.detail ?? `Request failed (${response.status})`);
+    throw new ApiError(error?.detail ?? `Request failed (${response.status})`, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -51,13 +62,16 @@ async function apiNoContent(path: string, init: RequestInit): Promise<void> {
   const response = await apiFetch(path, init);
   if (!response.ok) {
     const error = await response.json().catch(() => null) as { detail?: string } | null;
-    throw new Error(error?.detail ?? `Request failed (${response.status})`);
+    throw new ApiError(error?.detail ?? `Request failed (${response.status})`, response.status);
   }
 }
 
 export const getAuthConfig = () => publicJson<{ auth_enabled: boolean; client_id: string | null }>("/auth/config");
 export const getCurrentUser = () => apiJson<AuthenticatedUser>("/auth/me");
 export const logoutCurrentUser = () => apiNoContent("/auth/logout", { method: "POST" });
+export const getAdminUsers = () => apiJson<AdminUser[]>("/admin/users");
+export const createAdminUser = (body: AdminUser) => apiJson<AdminUser>("/admin/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const updateAdminUser = (email: string, body: Partial<Omit<AdminUser, "emailid">>) => apiJson<AdminUser>(`/admin/users/${encodeURIComponent(email)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export const getToolSources = () => apiJson<ToolSource[]>("/tool-sources");
 export const getTools = (query = "") => apiJson<ToolDefinition[]>(`/tools${query ? `?${query}` : ""}`);
