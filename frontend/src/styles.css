@@ -483,7 +483,14 @@
 .auth-card h1 { margin:0; color:var(--navy); font-family:var(--app-font-family); font-size:38px; line-height:1.15; }
 .auth-card > p:not(.eyebrow) { margin:12px 0 26px; color:var(--muted); line-height:1.55; }
 .auth-card small { display:block; margin-top:22px; color:var(--muted); line-height:1.45; }
+.auth-signin-control { display:grid; min-height:44px; place-items:center; }
+.auth-signin-control > * { grid-area:1/1; }
 .google-signin-button { display:flex; min-height:44px; justify-content:center; }
+.google-signin-button.pending { visibility:hidden; pointer-events:none; }
+.auth-signin-bubbles { display:flex; align-items:center; justify-content:center; gap:7px; min-height:44px; }
+.auth-signin-bubbles span { width:8px; height:8px; border-radius:50%; background:var(--blue); animation:conversation-dot 1.1s infinite ease-in-out; }
+.auth-signin-bubbles span:nth-child(2) { animation-delay:.15s; }
+.auth-signin-bubbles span:nth-child(3) { animation-delay:.3s; }
 .auth-error { margin-top:18px; padding:11px 13px; border:1px solid #d8a18d; border-radius:10px; background:#fff7f4; color:#88492f; font-size:14px; text-align:left; }
 .auth-loading { display:flex; align-items:center; justify-content:center; gap:10px; color:var(--muted); }
 .auth-loading .loading-circle { width:18px; height:18px; border-width:2px; }

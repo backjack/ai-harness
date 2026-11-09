@@ -39,7 +39,7 @@ function loadGoogleIdentity(): Promise<void> {
   return googleScriptPromise;
 }
 
-function LoginScreen({ clientId, error, onCredential }: { clientId: string; error: string; onCredential: (token: string) => Promise<void> }) {
+function LoginScreen({ clientId, error, signingIn, onCredential }: { clientId: string; error: string; signingIn: boolean; onCredential: (token: string) => Promise<void> }) {
   const buttonRef = useRef<HTMLDivElement>(null);
   const [googleError, setGoogleError] = useState("");
 
@@ -61,7 +61,12 @@ function LoginScreen({ clientId, error, onCredential }: { clientId: string; erro
     <p className="eyebrow">AI GOVERNANCE PLATFORM</p>
     <h1 id="auth-title">Welcome to AI Harness</h1>
     <p>Sign in or register with your Google account to manage agents, tools, initiatives, and analytics.</p>
-    {clientId && <div className="google-signin-button" ref={buttonRef} />}
+    {clientId && <div className="auth-signin-control">
+      <div className={`google-signin-button${signingIn ? " pending" : ""}`} ref={buttonRef} aria-hidden={signingIn} />
+      {signingIn && <div className="auth-signin-bubbles" role="status" aria-label="Signing you in">
+        <span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" />
+      </div>}
+    </div>}
     {(error || googleError) && <div className="auth-error" role="alert">{error || googleError}</div>}
     {!clientId && !error && <div className="auth-loading"><i className="loading-circle" /> Loading authentication…</div>}
     <small>Your Google ID token is validated by the server and retained only for this browser tab.</small>
@@ -86,7 +91,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState("");
   const [accessDenied, setAccessDenied] = useState("");
   const [bootstrapping, setBootstrapping] = useState(true);
+  const [signingIn, setSigningIn] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const signInPendingRef = useRef(false);
 
   const clearSession = useCallback(() => {
     sessionStorage.removeItem(TOKEN_KEY);
@@ -144,6 +151,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [clearSession]);
 
   const acceptCredential = useCallback(async (token: string) => {
+    if (signInPendingRef.current) return;
+    signInPendingRef.current = true;
+    setSigningIn(true);
     setError("");
     setAuthToken(token);
     try {
@@ -154,6 +164,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearSession();
       if (reason instanceof ApiError && reason.status === 403) setAccessDenied(reason.message);
       else setError(reason instanceof Error ? reason.message : "Google sign-in failed");
+    } finally {
+      signInPendingRef.current = false;
+      setSigningIn(false);
     }
   }, [clearSession]);
 
@@ -166,7 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   if (bootstrapping) return <main className="auth-page"><div className="auth-loading"><i className="loading-circle" /> Restoring your session…</div></main>;
   if (accessDenied) return <AccessDeniedScreen message={accessDenied} onRetry={retryWithAnotherAccount} />;
-  if (!user) return <LoginScreen clientId={clientId} error={error} onCredential={acceptCredential} />;
+  if (!user) return <LoginScreen clientId={clientId} error={error} signingIn={signingIn} onCredential={acceptCredential} />;
   return <AuthContext.Provider value={{ user, authEnabled, signingOut, signOut }}>{children}</AuthContext.Provider>;
 }
 
