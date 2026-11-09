@@ -127,6 +127,7 @@ export type ConversationSummary = {
   session_id: string;
   agent_id: string;
   agent_name: string | null;
+  model_id: string;
   title: string;
   interaction_count: number;
   last_activity_at: string;

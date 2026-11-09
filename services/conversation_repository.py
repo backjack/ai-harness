@@ -8,6 +8,7 @@ from typing import Any
 from mysql.connector import Error
 
 from services.chat_message import classify_message_payload, normalize_stored_message
+from services.direct_chat import DIRECT_CHAT_AGENT_ID, DIRECT_CHAT_AGENT_NAME
 from utils.database import DatabaseUnavailableError, get_connection_pool
 
 
@@ -29,19 +30,22 @@ def _json_object(value: Any) -> dict[str, Any]:
 def list_conversations_by_email(email_id: str, *, limit: int = 5) -> list[dict[str, Any]]:
     """Return the most recently active conversation summaries for one email."""
     query = (
-        "SELECT recent.session_id, recent.agent_id, agents.agent_name, "
+        "SELECT recent.session_id, recent.agent_id, "
+        "CASE WHEN recent.agent_id = %s THEN %s ELSE agents.agent_name END AS agent_name, "
+        "recent.model_id, "
         "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(first_interaction.input_payload, '$.user_prompt')), "
         "'New conversation') AS title, "
         "recent.interaction_count, recent.last_activity_at "
         "FROM ("
-        "SELECT session_id, agent_id, COUNT(*) AS interaction_count, "
+        "SELECT session_id, agent_id, model_id, COUNT(*) AS interaction_count, "
         "MAX(created_at) AS last_activity_at "
         "FROM agent_chat_interactions WHERE user_id = %s "
-        "GROUP BY session_id, agent_id ORDER BY last_activity_at DESC LIMIT %s"
+        "GROUP BY session_id, agent_id, model_id ORDER BY last_activity_at DESC LIMIT %s"
         ") AS recent "
         "JOIN agent_chat_interactions AS first_interaction "
         "ON first_interaction.session_id = recent.session_id "
         "AND first_interaction.agent_id = recent.agent_id "
+        "AND first_interaction.model_id = recent.model_id "
         "AND first_interaction.chat_sequence_id = 1 "
         "LEFT JOIN agents ON agents.agent_id = recent.agent_id "
         "ORDER BY recent.last_activity_at DESC"
@@ -49,7 +53,10 @@ def list_conversations_by_email(email_id: str, *, limit: int = 5) -> list[dict[s
     try:
         with closing(get_connection_pool().get_connection()) as connection:
             with closing(connection.cursor(dictionary=True)) as cursor:
-                cursor.execute(query, (email_id, limit))
+                cursor.execute(
+                    query,
+                    (DIRECT_CHAT_AGENT_ID, DIRECT_CHAT_AGENT_NAME, email_id, limit),
+                )
                 return cursor.fetchall()
     except Error as exc:
         logger.exception("Conversation summary lookup failed")
@@ -59,7 +66,9 @@ def list_conversations_by_email(email_id: str, *, limit: int = 5) -> list[dict[s
 def get_conversation_by_email(email_id: str, session_id: str) -> dict[str, Any] | None:
     """Return a complete conversation when the session belongs to the email."""
     query = (
-        "SELECT interactions.agent_id, agents.agent_name, interactions.input_payload, "
+        "SELECT interactions.agent_id, "
+        "CASE WHEN interactions.agent_id = %s THEN %s ELSE agents.agent_name END AS agent_name, "
+        "interactions.model_id, interactions.input_payload, "
         "interactions.output_payload, interactions.chat_sequence_id, interactions.created_at "
         "FROM agent_chat_interactions AS interactions "
         "LEFT JOIN agents ON agents.agent_id = interactions.agent_id "
@@ -69,7 +78,10 @@ def get_conversation_by_email(email_id: str, session_id: str) -> dict[str, Any] 
     try:
         with closing(get_connection_pool().get_connection()) as connection:
             with closing(connection.cursor(dictionary=True)) as cursor:
-                cursor.execute(query, (email_id, session_id))
+                cursor.execute(
+                    query,
+                    (DIRECT_CHAT_AGENT_ID, DIRECT_CHAT_AGENT_NAME, email_id, session_id),
+                )
                 rows = cursor.fetchall()
     except Error as exc:
         logger.exception("Conversation detail lookup failed")
@@ -111,6 +123,7 @@ def get_conversation_by_email(email_id: str, session_id: str) -> dict[str, Any] 
         "session_id": session_id,
         "agent_id": first["agent_id"],
         "agent_name": first["agent_name"],
+        "model_id": first["model_id"],
         "title": title,
         "interaction_count": len(rows),
         "last_activity_at": rows[-1]["created_at"],

@@ -7,14 +7,17 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from utils.database import (
     DatabaseConfigurationError,
     DatabaseUnavailableError,
     check_database_readiness,
 )
-from services.agent_repository import get_agent_for_email as get_agent, record_successful_chat
+from services.agent_repository import (
+    get_agent_for_email as get_agent,
+    record_successful_chat,
+)
 from services.chat_message import classify_message_payload, json_safe
 from services.conversation_agent import conversation_agent_cache
 from services.chat_events import ChatEventSink
@@ -24,6 +27,7 @@ from services.model_execution import (
 )
 from services.service_status import get_health_status, get_service_identifier
 from services.auth import AuthenticatedUser, CurrentUser
+from services.direct_chat import DIRECT_CHAT_MODELS, build_direct_chat_agent
 
 
 router = APIRouter()
@@ -32,7 +36,8 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     """A chat request associated with an agent and optional session."""
 
-    agent_id: str = Field(min_length=1, max_length=36)
+    agent_id: str | None = Field(default=None, min_length=1, max_length=36)
+    model_id: str | None = Field(default=None, min_length=1, max_length=255)
     user_prompt: Annotated[str, Field(min_length=1)]
     session_id: str | None = Field(default=None, min_length=1, max_length=255)
 
@@ -43,6 +48,14 @@ class ChatRequest(BaseModel):
         if not value.strip():
             raise ValueError("prompt must not be blank")
         return value
+
+    @model_validator(mode="after")
+    def select_agent_or_direct_model(self) -> "ChatRequest":
+        if bool(self.agent_id) == bool(self.model_id):
+            raise ValueError("Provide either agent_id or model_id")
+        if self.model_id and self.model_id not in DIRECT_CHAT_MODELS:
+            raise ValueError("Unsupported direct chat model")
+        return self
 
 
 class ChatResponse(BaseModel):
@@ -111,11 +124,14 @@ async def _run_chat(
     user: AuthenticatedUser,
     event_sink: ChatEventSink | None = None,
 ) -> ChatResponse:
-    """Generate and audit a response for a configured agent."""
+    """Generate and audit a response for a configured agent or direct model."""
     chat_event_id = event_sink.chat_event_id if event_sink else str(uuid4())
-    _emit(event_sink, "agent.lookup.start", agent_id=request.agent_id)
+    _emit(event_sink, "agent.lookup.start", agent_id=request.agent_id, model_id=request.model_id)
     try:
-        agent = get_agent(request.agent_id, user.email)
+        if request.agent_id:
+            agent = get_agent(request.agent_id, user.email)
+        else:
+            agent = build_direct_chat_agent(request.model_id or DIRECT_CHAT_MODELS[0])
     except DatabaseUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -124,6 +140,7 @@ async def _run_chat(
 
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    agent_id = str(agent["agent_id"])
     _emit(event_sink, "agent.lookup.end", agent=agent)
 
     session_id = request.session_id or str(uuid4())
@@ -164,7 +181,7 @@ async def _run_chat(
         classified_message = _classify_message(response.text, response.attributes)
         try:
             chat_sequence_id = record_successful_chat(
-                agent_id=request.agent_id,
+                agent_id=agent_id,
                 user_id=user.email,
                 session_id=session_id,
                 model_id=agent["model_id"],

@@ -34,6 +34,17 @@
 .agents-loading { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:260px; gap:8px; color:var(--muted); }
 .agents-loading .conversation-loading { width:44px; }
 .agents-loading p { margin:0; font-size:13px; }
+.agents-empty-state { display:grid; justify-items:center; width:min(680px,100%); min-height:340px; margin:0 auto; padding:48px 36px; place-content:center; border:1px solid var(--line); border-radius:18px; background:var(--paper); box-shadow:0 7px 22px rgba(13,43,73,.055); text-align:center; }
+.agents-empty-icon { display:grid; width:58px; height:58px; margin-bottom:18px; place-items:center; border-radius:16px; background:var(--navy); color:#d4b779; }
+.agents-empty-icon .marketplace-action-icon { width:26px; height:26px; }
+.agents-empty-state h2 { margin:0; color:var(--navy); font-size:24px; }
+.agents-empty-state p { max-width:470px; margin:10px 0 24px; color:var(--muted); line-height:1.55; }
+.agents-empty-state .primary-button { display:inline-flex; align-items:center; justify-content:center; gap:8px; }
+.agents-empty-state .primary-button .marketplace-action-icon { width:18px; height:18px; }
+@media (max-width:760px) {
+  .agents-empty-state { min-height:300px; padding:36px 20px; }
+  .agents-empty-state .primary-button { width:min(280px,100%); }
+}
 .agent-card .card-actions { flex:0 0 auto; gap:6px; }
 .agent-card .agent-card-action { width:32px; height:32px; border-radius:8px; }
 .agent-card-action .marketplace-action-icon { width:16px; height:16px; }

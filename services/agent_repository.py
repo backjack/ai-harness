@@ -10,6 +10,7 @@ from mysql.connector import Error, IntegrityError
 
 from utils.database import DatabaseUnavailableError, get_connection_pool
 from services.admin_access import normalize_email
+from services.direct_chat import DIRECT_CHAT_AGENT_ID, DIRECT_CHAT_AGENT_NAME
 from services.tool_runtime import ToolFunctionValidationError, validate_tool_definitions
 
 
@@ -342,7 +343,10 @@ def get_analytics_usage(*, lookback_days: int) -> dict[str, list[dict[str, Any]]
                 )
                 by_model = cursor.fetchall()
                 cursor.execute(
-                    "SELECT aci.agent_id, agents.agent_name, aci.model_id, "
+                    "SELECT aci.agent_id, "
+                    f"CASE WHEN aci.agent_id = '{DIRECT_CHAT_AGENT_ID}' "
+                    f"THEN '{DIRECT_CHAT_AGENT_NAME}' ELSE agents.agent_name END AS agent_name, "
+                    "aci.model_id, "
                     "COUNT(*) AS interaction_count, "
                     "COALESCE(SUM(aci.input_token_count), 0) AS input_tokens, "
                     "COALESCE(SUM(aci.output_token_count), 0) AS output_tokens "

@@ -197,6 +197,30 @@ function PythonEditor({ value, onChange, label = "Python source" }: { value: str
   return <label className="python-editor"><span>{label}</span><CodeMirror value={value} height="190px" extensions={[python()]} onChange={onChange} basicSetup={{ lineNumbers: true, foldGutter: true, highlightActiveLine: true, autocompletion: true }} /></label>;
 }
 
+const DIRECT_CHAT_AGENT_ID = "00000000-0000-0000-0000-000000000000";
+const DEFAULT_DIRECT_CHAT_MODEL = "gpt-5.4-mini";
+const DIRECT_CHAT_PREFIX = "direct:";
+const DIRECT_CHAT_OPTIONS: Agent[] = ["gpt-5.4-mini", "gpt-4.1-mini"].map((modelId) => ({
+  agent_id: `${DIRECT_CHAT_PREFIX}${modelId}`,
+  agent_name: "AI Assistant",
+  description: "Direct model chat",
+  initiative_id: null,
+  model_id: modelId,
+  model_type: "openai",
+  tooling: [],
+  system_prompts: [],
+  user_prompts: [],
+  guardrails: {},
+}));
+
+function directChatModel(selectionId: string): string | undefined {
+  return selectionId.startsWith(DIRECT_CHAT_PREFIX) ? selectionId.slice(DIRECT_CHAT_PREFIX.length) : undefined;
+}
+
+function directChatSelection(modelId: string): string {
+  return `${DIRECT_CHAT_PREFIX}${DIRECT_CHAT_OPTIONS.some((option) => option.model_id === modelId) ? modelId : DEFAULT_DIRECT_CHAT_MODEL}`;
+}
+
 function createConversation(agentId: string): Conversation {
   return { id: crypto.randomUUID(), agentId, historyLoaded: true, title: "New conversation", messages: [] };
 }
@@ -208,7 +232,7 @@ function conversationPath(sessionId: string) {
 function conversationFromSummary(summary: ConversationSummary): Conversation {
   return {
     id: `saved:${summary.session_id}`,
-    agentId: summary.agent_id,
+    agentId: summary.agent_id === DIRECT_CHAT_AGENT_ID ? directChatSelection(summary.model_id) : summary.agent_id,
     sessionId: summary.session_id,
     chatSequenceId: summary.interaction_count,
     historyLoaded: false,
@@ -970,6 +994,8 @@ function AgentManager({ agents, loading, onCreated, onUpdated, onDeleted }: { ag
 
   if (loading) return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div></div><div className="agents-loading" role="status" aria-live="polite"><div className="conversation-loading" aria-hidden="true"><span /><span /><span /></div><p>Loading agents</p></div></div>;
 
+  if (agents.length === 0 && !wizardOpen) return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div></div><section className="agents-empty-state" aria-labelledby="agents-empty-title"><div className="agents-empty-icon" aria-hidden="true"><MarketplaceActionIcon name="plus" /></div><h2 id="agents-empty-title">Create your first agent</h2><p>Configure an AI agent with instructions, a model, tools, and guardrails for your conversations.</p><button type="button" className="primary-button" onClick={openCreate}><MarketplaceActionIcon name="plus" /><span>Create agent</span></button></section></div>;
+
   return <div className="agents-page"><div className="agents-page-header"><div><p className="eyebrow">AGENT MANAGEMENT</p><h1>Agents</h1><p>Create and manage the AI agents available in chat.</p></div><div className="agent-header-actions"><label className="catalog-search agent-search"><span className="sr-only">Search agents</span><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search agents" /></label><button className="primary-button" onClick={openCreate}>Create agent</button></div></div><div className="agent-grid">{visibleAgents.map((agent) => <article className="agent-card" key={agent.agent_id}><div className="agent-card-heading"><h2>{agent.agent_name}</h2>{ownsAgent(agent) ? <div className="card-actions"><button type="button" className="marketplace-icon-button secondary-icon agent-card-action" disabled={saving} onClick={() => openEdit(agent)} aria-label={`Edit ${agent.agent_name}`} title={`Edit ${agent.agent_name}`}><MarketplaceActionIcon name="edit" /></button><button type="button" className="marketplace-icon-button danger-icon agent-card-action" disabled={saving} onClick={() => void removeAgent(agent)} aria-label={`Delete ${agent.agent_name}`} title={`Delete ${agent.agent_name}`}><MarketplaceActionIcon name="trash" /></button></div> : <span className="shared-agent-badge">Shared</span>}</div><p title={agent.description || undefined}>{agent.description || "No description provided."}</p><span className="agent-model-tag" title={agent.model_id}>{agent.model_id}</span></article>)}{visibleAgents.length === 0 && <p className="catalog-empty">No agents match “{search.trim()}”.</p>}</div>{wizardOpen && <div className={`agent-modal-backdrop ${readOnly ? "read-only-agent" : ""}`} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeModal(); }}><section className="agent-modal" role="dialog" aria-modal="true" aria-labelledby="create-agent-title"><div className="agent-modal-header"><div><p className="eyebrow">{readOnly ? "AGENT DETAILS" : editingAgent ? "EDIT AGENT" : "CREATE AGENT"}</p><h1 id="create-agent-title">{readOnly ? viewingAgent?.agent_name : editingAgent ? `Edit ${editingAgent.agent_name}` : "New agent"}</h1></div><button className="modal-close" type="button" onClick={closeModal} disabled={saving} aria-label={readOnly ? "Close agent details" : editingAgent ? "Close edit agent dialog" : "Close new agent dialog"}>×</button></div><div className="wizard-navigation-row"><div className="wizard-steps" aria-label={readOnly ? "Agent details sections" : editingAgent ? "Editing progress" : "Creation progress"}>
         {[
           { id: 1, label: "Setup", icon: "details" as const },
@@ -1167,8 +1193,9 @@ export default function App() {
   const routeSessionId = conversationRoute?.params.sessionId;
   const view = location.pathname.startsWith("/initiatives") ? "initiatives" : location.pathname === "/agents" ? "agents" : location.pathname === "/marketplace" ? "marketplace" : location.pathname === "/analytics" ? "analytics" : location.pathname === "/admin/users" ? "admin" : "chat";
   const [agents, setAgents] = useState<Agent[]>([]);
+  const configuredAgents = agents.filter((agent) => !directChatModel(agent.agent_id));
   const [agentsLoading, setAgentsLoading] = useState(true);
-  const [selectedAgent, setSelectedAgent] = useState("");
+  const [selectedAgent, setSelectedAgent] = useState(directChatSelection(DEFAULT_DIRECT_CHAT_MODEL));
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | undefined>();
   const [prompt, setPrompt] = useState("");
@@ -1190,14 +1217,16 @@ export default function App() {
   const localDraft = conversations.find((conversation) => !conversation.sessionId && !conversation.messages.length);
   const savedConversations = conversations.filter((conversation) => conversation.id !== localDraft?.id).slice(0, 5);
   const sidebarConversations = localDraft ? [localDraft, ...savedConversations] : savedConversations;
-  const selectedAgentName = agents.find((agent) => agent.agent_id === selectedAgent)?.agent_name ?? "Choose an agent";
+  const selectedAgentName = agents.find((agent) => agent.agent_id === selectedAgent)?.agent_name
+    ?? (directChatModel(selectedAgent) ? "AI Assistant" : "Choose a model or agent");
   const conversationTitle = active?.messages.find((message) => message.role === "user")?.content ?? active?.title ?? "New conversation";
   const mobilePageTitle = view === "agents" ? "Agents" : view === "initiatives" ? "Initiatives" : view === "marketplace" ? "Marketplace" : view === "analytics" ? "Analytics" : view === "admin" ? "Admin users" : conversationTitle;
 
   useEffect(() => {
     getAgents().then((items) => {
-      setAgents(items);
-      setSelectedAgent(items[0]?.agent_id ?? "");
+      const chatOptions = [...DIRECT_CHAT_OPTIONS, ...items];
+      setAgents(chatOptions);
+      setSelectedAgent(directChatSelection(DEFAULT_DIRECT_CHAT_MODEL));
     }).catch((reason: Error) => setError(reason.message)).finally(() => setAgentsLoading(false));
   }, []);
 
@@ -1295,18 +1324,21 @@ export default function App() {
   function newChat() {
     conversationLoadControllerRef.current?.abort();
     setConversationLoadingId(undefined);
+    const defaultSelection = directChatSelection(DEFAULT_DIRECT_CHAT_MODEL);
+    setSelectedAgent(defaultSelection);
     const draft = conversations.find((conversation) => !conversation.sessionId && !conversation.messages.length);
     if (draft) {
-      routeDraftRef.current = draft;
+      const modelDraft = { ...draft, agentId: defaultSelection };
+      routeDraftRef.current = modelDraft;
       setActiveId(draft.id);
-      if (draft.agentId) setSelectedAgent(draft.agentId);
+      setConversations((items) => items.map((item) => item.id === draft.id ? modelDraft : item));
       navigate("/chat");
       setPrompt("");
       setError("");
       requestAnimationFrame(() => resizeTextarea());
       return;
     }
-    const conversation = createConversation(selectedAgent);
+    const conversation = createConversation(defaultSelection);
     routeDraftRef.current = conversation;
     setConversations((items) => [conversation, ...items]);
     setActiveId(conversation.id);
@@ -1346,7 +1378,12 @@ export default function App() {
     setStreaming(true);
     let finalResult: ChatEvent["response"];
     try {
-      await streamChat({ agent_id: agentId, user_prompt: text, session_id: conversation.sessionId }, (event) => {
+      const directModel = directChatModel(agentId);
+      await streamChat({
+        ...(directModel ? { model_id: directModel } : { agent_id: agentId }),
+        user_prompt: text,
+        session_id: conversation.sessionId,
+      }, (event) => {
         setConversations((items) => items.map((item) => item.id === conversationId ? {
           ...item,
           executionEvents: [...(item.executionEvents ?? []), event],
@@ -1410,10 +1447,13 @@ export default function App() {
     try {
       const detail = await getConversation(conversation.sessionId, controller.signal);
       if (controller.signal.aborted) return;
-      setSelectedAgent(detail.agent_id);
+      const restoredSelection = detail.agent_id === DIRECT_CHAT_AGENT_ID
+        ? directChatSelection(detail.model_id)
+        : detail.agent_id;
+      setSelectedAgent(restoredSelection);
       setConversations((items) => items.map((item) => item.id === conversation.id ? {
         ...item,
-        agentId: detail.agent_id,
+        agentId: restoredSelection,
         chatSequenceId: detail.interaction_count,
         historyLoaded: true,
         title: detail.title || item.title,
@@ -1443,7 +1483,11 @@ export default function App() {
   }
 
   function agentCreated(agent: Agent) {
-    setAgents((items) => [agent, ...items]);
+    setAgents((items) => [
+      ...DIRECT_CHAT_OPTIONS,
+      agent,
+      ...items.filter((item) => !directChatModel(item.agent_id) && item.agent_id !== agent.agent_id),
+    ]);
     setSelectedAgent(agent.agent_id);
     const conversation = createConversation(agent.agent_id);
     routeDraftRef.current = conversation;
@@ -1458,9 +1502,10 @@ export default function App() {
   }
 
   function agentDeleted(agentId: string) {
-    const remaining = agents.filter((agent) => agent.agent_id !== agentId);
-    setAgents(remaining);
-    if (selectedAgent === agentId) setSelectedAgent(remaining[0]?.agent_id ?? "");
+    const remaining = configuredAgents.filter((agent) => agent.agent_id !== agentId);
+    const chatOptions = [...DIRECT_CHAT_OPTIONS, ...remaining];
+    setAgents(chatOptions);
+    if (selectedAgent === agentId) setSelectedAgent(directChatSelection(DEFAULT_DIRECT_CHAT_MODEL));
   }
 
   const conversationAgentName = agents.find((agent) => agent.agent_id === active?.agentId)?.agent_name ?? selectedAgentName;
@@ -1468,9 +1513,25 @@ export default function App() {
   const activeHistoryPending = Boolean(active?.sessionId && !active.historyLoaded);
   const headerAgent = agents.find((agent) => agent.agent_id === active?.agentId) ?? (!active?.sessionId ? agents.find((agent) => agent.agent_id === selectedAgent) : undefined);
   const isEmptyConversation = !activeConversationLoading && !active?.messages.length;
-  const conversationModelId = headerAgent?.model_id ?? (activeHistoryPending || activeConversationLoading ? "Loading model…" : "No model selected");
+  const conversationModelId = headerAgent?.model_id
+    ?? directChatModel(active?.agentId ?? selectedAgent)
+    ?? (activeHistoryPending || activeConversationLoading ? "Loading model…" : "No model selected");
 
-  const composer = <form className="composer-wrap" onSubmit={submit}><div className="composer"><div className="agent-picker-wrap" ref={agentPickerRef}><button type="button" className="agent-picker-trigger" aria-label={`Choose agent, currently ${selectedAgentName}`} title={selectedAgentName} aria-expanded={agentPickerOpen} onClick={() => setAgentPickerOpen((open) => !open)}><span className="agent-picker-plus" aria-hidden="true">+</span><span className="selected-agent-name">{selectedAgentName}</span><span className="selected-agent-acronym" aria-hidden="true">{selectedAgent ? agentInitials(selectedAgentName) : "AI"}</span></button>{agentPickerOpen && <div className="agent-picker" role="listbox" aria-label="Choose an agent">{agents.map((agent) => <button type="button" key={agent.agent_id} className={agent.agent_id === selectedAgent ? "agent-option active" : "agent-option"} onClick={() => selectAgent(agent.agent_id)} role="option" aria-selected={agent.agent_id === selectedAgent}><span>{agent.agent_name}</span><small>{agent.model_id}</small></button>)}</div>}</div><textarea ref={textareaRef} value={prompt} onChange={(event) => updatePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(event); } }} placeholder={activeConversationLoading ? "Loading conversation..." : activeHistoryPending ? "Select the conversation again to retry" : selectedAgent ? `Ask ${selectedAgentName} anything...` : "Select an agent to begin"} disabled={!selectedAgent || streaming || activeHistoryPending} rows={1} /><button type="submit" className="send-button" aria-label="Send message" disabled={!prompt.trim() || !selectedAgent || streaming || activeHistoryPending}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-5 5m5-5 5 5" /></svg></button></div><p>AI Harness may make mistakes. Check important information.</p></form>;
+  const composer = <form className="composer-wrap" onSubmit={submit}>
+    <div className="composer">
+      <div className="agent-picker-wrap" ref={agentPickerRef}>
+        <button type="button" className="agent-picker-trigger" aria-label={`Choose model or agent, currently ${selectedAgentName}`} title={selectedAgentName} aria-expanded={agentPickerOpen} onClick={() => setAgentPickerOpen((open) => !open)}>
+          <span className="agent-picker-plus" aria-hidden="true">+</span>
+          <span className="selected-agent-name">{selectedAgentName}</span>
+          <span className="selected-agent-acronym" aria-hidden="true">{selectedAgent ? agentInitials(selectedAgentName) : "AI"}</span>
+        </button>
+        {agentPickerOpen && <div className="agent-picker" role="listbox" aria-label="Choose model or agent">{agents.map((agent) => <button type="button" key={agent.agent_id} className={agent.agent_id === selectedAgent ? "agent-option active" : "agent-option"} onClick={() => selectAgent(agent.agent_id)} role="option" aria-selected={agent.agent_id === selectedAgent}><span>{agent.agent_name}</span><small>{agent.model_id}</small></button>)}</div>}
+      </div>
+      <textarea ref={textareaRef} value={prompt} onChange={(event) => updatePrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(event); } }} placeholder={activeConversationLoading ? "Loading conversation..." : activeHistoryPending ? "Select the conversation again to retry" : `Ask ${selectedAgentName} anything...`} disabled={streaming || activeHistoryPending} rows={1} />
+      <button type="submit" className="send-button" aria-label="Send message" disabled={!prompt.trim() || streaming || activeHistoryPending}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 18V6m0 0-5 5m5-5 5 5" /></svg></button>
+    </div>
+    <p>AI Harness may make mistakes. Check important information.</p>
+  </form>;
 
   return <main className="app-shell">
     <aside id="mobile-navigation" aria-label="Application navigation" className={`${sidebarExpanded || mobileNavOpen ? "sidebar expanded" : "sidebar"}${mobileNavOpen ? " mobile-open" : ""}`} onPointerEnter={() => setSidebarExpanded(true)} onPointerLeave={() => setSidebarExpanded(false)} onPointerUp={(event) => { if ((event.target as Element).closest("button,a")) { setSidebarExpanded(false); setMobileNavOpen(false); } }} onFocusCapture={() => setSidebarExpanded(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSidebarExpanded(false); }}>
@@ -1487,7 +1548,7 @@ export default function App() {
     <section className={view === "chat" ? "workspace" : "workspace content-workspace"}>
       {view !== "chat" && <header className="mobile-topbar"><button ref={mobileMenuRef} type="button" className="mobile-menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-controls="mobile-navigation" aria-expanded={mobileNavOpen}><span /><span /><span /></button><span className="mobile-page-label">{mobilePageTitle}</span></header>}
       <Routes><Route path="/" element={<Navigate to="/chat" replace />} /><Route path="/chat" element={null} /><Route path="/conversations/:sessionId" element={null} /><Route path="/agents" element={null} /><Route path="/initiatives" element={null} /><Route path="/initiatives/new" element={null} /><Route path="/initiatives/:initiativeId" element={null} /><Route path="/initiatives/:initiativeId/edit" element={null} /><Route path="/marketplace" element={null} /><Route path="/analytics" element={null} /><Route path="/admin/users" element={user.is_admin ? null : <Navigate to="/chat" replace />} /><Route path="*" element={<Navigate to="/chat" replace />} /></Routes>
-      {view === "initiatives" ? <InitiativeManagement /> : view === "agents" ? <AgentManager agents={agents} loading={agentsLoading} onCreated={agentCreated} onUpdated={agentUpdated} onDeleted={agentDeleted} /> : view === "marketplace" ? <ToolLibraryMarketplace agents={agents} onUpdated={agentUpdated} /> : view === "analytics" ? <AnalyticsDashboard /> : view === "admin" && user.is_admin ? <AdminUsers /> : <>
+      {view === "initiatives" ? <InitiativeManagement /> : view === "agents" ? <AgentManager agents={configuredAgents} loading={agentsLoading} onCreated={agentCreated} onUpdated={agentUpdated} onDeleted={agentDeleted} /> : view === "marketplace" ? <ToolLibraryMarketplace agents={configuredAgents} onUpdated={agentUpdated} /> : view === "analytics" ? <AnalyticsDashboard /> : view === "admin" && user.is_admin ? <AdminUsers /> : <>
       <header className="topbar"><button ref={mobileMenuRef} type="button" className="mobile-menu-button" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-controls="mobile-navigation" aria-expanded={mobileNavOpen}><span /><span /><span /></button><span className="conversation-model" title={conversationModelId}>{conversationModelId}</span><span className="topbar-divider" aria-hidden="true" /><span className="conversation-title" title={conversationTitle} aria-label={conversationTitle}>{conversationTitle}</span></header>
       <div ref={chatBodyRef} className={!isEmptyConversation ? "chat-body transcript" : "chat-body welcome"}>
         {activeConversationLoading && <div className="transcript-loading" role="status" aria-label="Loading conversation"><span /><span /><span /><p>Loading conversation</p></div>}

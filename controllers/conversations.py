@@ -18,6 +18,7 @@ class ConversationSummary(BaseModel):
     session_id: str
     agent_id: str
     agent_name: str | None
+    model_id: str
     title: str
     interaction_count: int
     last_activity_at: datetime

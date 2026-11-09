@@ -253,6 +253,7 @@ def test_conversations_returns_five_email_scoped_summaries(monkeypatch) -> None:
             "session_id": "session-1",
             "agent_id": "11111111-1111-1111-1111-111111111111",
             "agent_name": "Assistant",
+            "model_id": "gpt-5.4-mini",
             "title": "Review my portfolio",
             "interaction_count": 3,
             "last_activity_at": datetime(2026, 10, 31, 10, 30, tzinfo=timezone.utc),
@@ -292,6 +293,7 @@ def test_conversation_detail_returns_complete_email_scoped_transcript(monkeypatc
             "session_id": session_id,
             "agent_id": "11111111-1111-1111-1111-111111111111",
             "agent_name": "Assistant",
+            "model_id": "gpt-5.4-mini",
             "title": "Review my portfolio",
             "interaction_count": 1,
             "last_activity_at": timestamp,
@@ -344,6 +346,7 @@ def test_legacy_conversation_chart_is_reclassified_from_raw_response(monkeypatch
     rows = [{
         "agent_id": "11111111-1111-1111-1111-111111111111",
         "agent_name": "Assistant",
+        "model_id": "gpt-5.4-mini",
         "input_payload": {"user_prompt": "Chart my allocation"},
         "output_payload": {
             "response": '{"type":"chart","content":{"library":"highcharts","options":{"series":[{"data":[40,60]}]}}}'
@@ -353,9 +356,9 @@ def test_legacy_conversation_chart_is_reclassified_from_raw_response(monkeypatch
     }]
 
     class Cursor:
-        def execute(self, query: str, parameters: tuple[str, str]) -> None:
+        def execute(self, query: str, parameters: tuple[str, ...]) -> None:
             assert "interactions.user_id = %s" in query
-            assert parameters == ("neeraj@example.com", "session-1")
+            assert parameters[-2:] == ("neeraj@example.com", "session-1")
 
         def fetchall(self) -> list[dict[str, object]]:
             return rows
@@ -573,6 +576,59 @@ def test_chat_returns_model_response(monkeypatch) -> None:
         "type": "markdown",
         "content": "Hi there!",
     }
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4-mini", "gpt-4.1-mini"])
+def test_direct_chat_uses_approved_model(
+    monkeypatch, model_id: str
+) -> None:
+    from services.direct_chat import DIRECT_CHAT_AGENT_ID
+
+    audited: dict[str, object] = {}
+
+    class FakeModelExecution:
+        async def execute_with_metadata(
+            self,
+            prompt: str,
+            system_prompts: list[str],
+            history: list[object],
+            tools: list[object],
+        ) -> ModelResponse:
+            assert prompt == "Hello"
+            assert len(system_prompts) == 1
+            assert "highcharts" in system_prompts[0]
+            assert tools == []
+            return ModelResponse("Hi from direct chat", input_tokens=2, output_tokens=3)
+
+    def model_execution(provider: str, selected_model: str) -> FakeModelExecution:
+        assert provider == "openai"
+        assert selected_model == model_id
+        return FakeModelExecution()
+
+    monkeypatch.setattr("services.conversation_agent.get_session_history", lambda *args: [])
+    monkeypatch.setattr("services.conversation_agent.get_model_execution", model_execution)
+    monkeypatch.setattr(
+        "controllers.service_status.record_successful_chat",
+        lambda **kwargs: audited.update(kwargs) or 1,
+    )
+
+    response = client.post(
+        "/api/chat",
+        json={"model_id": model_id, "user_prompt": "Hello", "session_id": f"direct-{model_id}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["response"]["content"] == "Hi from direct chat"
+    assert audited["agent_id"] == DIRECT_CHAT_AGENT_ID
+    assert audited["model_id"] == model_id
+
+
+def test_direct_chat_rejects_unsupported_model() -> None:
+    unsupported = client.post(
+        "/api/chat",
+        json={"model_id": "gpt-5.4", "user_prompt": "Hello"},
+    )
+    assert unsupported.status_code == 422
 
 
 def test_conversation_guardrail_blocks_before_model_and_tools() -> None:

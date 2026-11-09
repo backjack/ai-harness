@@ -121,7 +121,8 @@ export async function getConversation(sessionId: string, signal?: AbortSignal): 
 }
 
 export async function streamChat(body: {
-  agent_id: string;
+  agent_id?: string;
+  model_id?: string;
   user_prompt: string;
   session_id?: string;
 }, onEvent: (event: ChatEvent) => void): Promise<void> {
